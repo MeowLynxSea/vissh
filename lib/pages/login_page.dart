@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:dartssh2/dartssh2.dart';
 import '../main.dart';
+import '../models/credentials.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -27,28 +28,41 @@ class _LoginPageState extends State<LoginPage> {
         onPasswordRequest: () => _passwordController.text,
       );
 
-      // ignore: use_build_context_synchronously
+      final credentials = SSHCredentials(
+        host: _hostController.text,
+        username: _usernameController.text,
+        password: _passwordController.text,
+      );
+
+      if (!mounted) return;
+
       Navigator.push(
         context,
         MaterialPageRoute(
-            builder: (context) =>
-                WindowManager(sshClient: client, host: _hostController.text)),
+          builder: (context) => WindowManager(
+            sshClient: client,
+            credentials: credentials,
+          ),
+        ),
       );
     } catch (e) {
-      // ignore: use_build_context_synchronously
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Login Failed: $e')),
       );
     } finally {
-      setState(() {
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: const Color(0xff0078D4),
       body: Container(
         decoration: const BoxDecoration(
           image: DecorationImage(
@@ -58,10 +72,10 @@ class _LoginPageState extends State<LoginPage> {
         ),
         child: Center(
           child: Container(
-            padding: const EdgeInsets.all(20.0),
+            padding: const EdgeInsets.fromLTRB(40, 20, 40, 20),
             width: 300,
             decoration: BoxDecoration(
-              color: Colors.black.withValues(alpha: 0.7),
+              color: Colors.black.withValues(alpha: 0.4),
               borderRadius: BorderRadius.circular(10),
             ),
             child: Column(

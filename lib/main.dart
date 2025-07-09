@@ -1,9 +1,12 @@
 import 'package:dartssh2/dartssh2.dart';
 import 'package:flutter/material.dart';
-import 'widgets/draggable_window.dart';
-import 'models/window_data.dart';
-import 'widgets/taskbar.dart';
-import 'pages/login_page.dart';
+import 'package:vissh/pages/terminal_page.dart';
+import 'package:vissh/widgets/draggable_window.dart';
+import 'package:vissh/models/window_data.dart';
+import 'package:vissh/widgets/taskbar.dart';
+import 'package:vissh/pages/login_page.dart';
+import 'package:vissh/models/credentials.dart';
+import 'package:flutter/services.dart';
 
 void main() {
   runApp(const MyApp());
@@ -23,8 +26,13 @@ class MyApp extends StatelessWidget {
 
 class WindowManager extends StatefulWidget {
   final SSHClient sshClient;
-  final String host;
-  const WindowManager({super.key, required this.sshClient, required this.host});
+  final SSHCredentials credentials;
+
+  const WindowManager({
+    super.key,
+    required this.sshClient,
+    required this.credentials,
+  });
 
   @override
   State<WindowManager> createState() => _WindowManagerState();
@@ -40,6 +48,7 @@ class _WindowManagerState extends State<WindowManager> {
 
   @override
   void initState() {
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: [SystemUiOverlay.bottom]);
     super.initState();
     _verifyConnection();
   }
@@ -65,7 +74,7 @@ class _WindowManagerState extends State<WindowManager> {
     _addWindow(
       'File Explorer',
       const Offset(100, 100),
-      const Center(
+      (isActive, onSessionEnd) => const Center(
         child: Text('View your files...', style: TextStyle(color: Colors.white)),
       ),
       Icons.folder_open,
@@ -73,15 +82,17 @@ class _WindowManagerState extends State<WindowManager> {
     _addWindow(
       'Terminal',
       const Offset(150, 150),
-      Center(
-        child: Text('SSH connected to: ${widget.host}',
-            style: const TextStyle(color: Colors.white)),
+      (isActive, onSessionEnd) => TerminalPage(
+        credentials: widget.credentials,
+        isActive: isActive,
+        onSessionEnd: onSessionEnd,
       ),
-      Icons.web,
+      Icons.terminal,
     );
   }
 
-  void _addWindow(String title, Offset position, Widget child, IconData icon) {
+  void _addWindow(
+      String title, Offset position, Widget Function(bool, VoidCallback) child, IconData icon) {
     setState(() {
       final id = 'window_${_nextWindowId++}';
       _windows.add(
@@ -89,7 +100,7 @@ class _WindowManagerState extends State<WindowManager> {
           id: id,
           title: title,
           position: position,
-          size: const Size(400, 300),
+          size: const Size(700, 500),
           child: child,
           icon: icon,
         ),
@@ -105,7 +116,6 @@ class _WindowManagerState extends State<WindowManager> {
       if (window.isMinimized) {
         window.isMinimized = false;
       }
-
       if (windowIndex != _windows.length - 1) {
         final window = _windows.removeAt(windowIndex);
         _windows.add(window);
@@ -180,13 +190,11 @@ class _WindowManagerState extends State<WindowManager> {
   @override
   Widget build(BuildContext context) {
     if (!_isVerified) {
-      // --- Win11 风格的验证界面 ---
       bool hasError = _verificationFailedMessage.isNotEmpty;
-
       return Scaffold(
-        backgroundColor: const Color(0xff0078D4), // Win11 蓝色背景
+        backgroundColor: const Color(0xff0078D4),
         body: Container(
-            decoration: const BoxDecoration(
+          decoration: const BoxDecoration(
             image: DecorationImage(
               image: NetworkImage('https://www.meowdream.cn/background.jpg'),
               fit: BoxFit.cover,
@@ -197,9 +205,8 @@ class _WindowManagerState extends State<WindowManager> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 const SizedBox(height: 120),
-                
                 hasError
-                    ? Icon(Icons.error_outline, color: Colors.redAccent, size: 48)
+                    ? const Icon(Icons.error_outline, color: Colors.redAccent, size: 48)
                     : SizedBox(
                         width: 48,
                         height: 48,
@@ -209,7 +216,6 @@ class _WindowManagerState extends State<WindowManager> {
                         ),
                       ),
                 const SizedBox(height: 40),
-
                 Text(
                   _verificationMessage,
                   style: const TextStyle(
@@ -219,7 +225,6 @@ class _WindowManagerState extends State<WindowManager> {
                   ),
                 ),
                 const SizedBox(height: 10),
-
                 if (hasError)
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 40.0),
@@ -232,10 +237,7 @@ class _WindowManagerState extends State<WindowManager> {
                       ),
                     ),
                   ),
-
-                if (hasError)
-                  SizedBox(height: 16),
-
+                if (hasError) const SizedBox(height: 16),
                 if (hasError)
                   TextButton(
                     onPressed: () {
@@ -249,7 +251,7 @@ class _WindowManagerState extends State<WindowManager> {
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
                     ),
                     child: const Text(
-                      '返回',
+                      'Back',
                       style: TextStyle(
                         color: Colors.white,
                         fontSize: 16,
@@ -271,8 +273,7 @@ class _WindowManagerState extends State<WindowManager> {
     });
 
     final topMostIndex = _windows.lastIndexWhere((w) => !w.isMinimized);
-    final activeWindowId =
-        topMostIndex != -1 ? _windows[topMostIndex].id : null;
+    final activeWindowId = topMostIndex != -1 ? _windows[topMostIndex].id : null;
 
     return Scaffold(
       backgroundColor: Colors.blueGrey[900],
@@ -322,20 +323,21 @@ class _WindowManagerState extends State<WindowManager> {
         children: [
           FloatingActionButton(
             onPressed: () => _addWindow(
-              'New Window',
-              const Offset(200, 200),
-              const Center(
-                child: Text('This is the new window content area',
-                style: TextStyle(color: Colors.white))
+              'Terminal',
+              const Offset(150, 150),
+              (isActive, onSessionEnd) => TerminalPage(
+                credentials: widget.credentials,
+                isActive: isActive,
+                onSessionEnd: onSessionEnd,
               ),
-              Icons.add_circle_outline,
+              Icons.terminal,
             ),
             tooltip: 'Add New Window',
             child: const Icon(Icons.add),
           ),
           const SizedBox(height: 32),
-        ]
-      )
+        ],
+      ),
     );
   }
 }

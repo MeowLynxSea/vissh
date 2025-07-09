@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 class WindowData {
   final String id;
   final String title;
-  final Widget child;
+  final Widget Function(bool isActive, VoidCallback onSessionEnd) child;
   final IconData icon;
   Offset position;
   Size size;

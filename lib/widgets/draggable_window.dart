@@ -11,7 +11,7 @@ class DraggableWindow extends StatefulWidget {
   final Offset initialPosition;
   final Size initialSize;
   final String title;
-  final Widget child;
+  final Widget Function(bool isActive, VoidCallback onSessionEnd) child;
   final IconData icon;
   final bool isActive;
   final bool isMaximized;
@@ -152,7 +152,7 @@ class _DraggableWindowState extends State<DraggableWindow> {
         _top = 0;
         _left = 0;
         _width = screenSize.width;
-        _height = screenSize.height - 40;
+        _height = screenSize.height - 48;
         _isMaximized = true;
       }
     });
@@ -227,7 +227,11 @@ class _DraggableWindowState extends State<DraggableWindow> {
                             child: Column(
                               children: [
                                 _buildTitleBar(),
-                                Expanded(child: widget.child),
+                                Expanded(
+                                  child: ClipRect(
+                                    child: widget.child(widget.isActive, () => widget.onClose(widget.id)),
+                                  )
+                                ),
                               ],
                             ),
                           ),
