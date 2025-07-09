@@ -15,6 +15,7 @@ class DraggableWindow extends StatefulWidget {
   final IconData icon;
   final bool isActive;
   final bool isMaximized;
+  final bool isMinimized;
   final Function(String, bool) onMaximizeChanged;
   final Function(String) onBringToFront;
   final Function(String) onClose;
@@ -34,6 +35,7 @@ class DraggableWindow extends StatefulWidget {
     required this.onBringToFront,
     required this.onClose,
     required this.onMinimize,
+    required this.isMinimized,
     required this.onMove,
     required this.onResize,
     required this.isMaximized,
@@ -110,6 +112,15 @@ class _DraggableWindowState extends State<DraggableWindow> {
   @override
   void didUpdateWidget(covariant DraggableWindow oldWidget) {
     super.didUpdateWidget(oldWidget);
+
+    if (oldWidget.isMinimized && !widget.isMinimized) {
+      if (_isClosing) {
+        setState(() {
+          _isClosing = false;
+        });
+      }
+    }
+
     if (widget.initialPosition != oldWidget.initialPosition) {
       _top = widget.initialPosition.dy;
       _left = widget.initialPosition.dx;

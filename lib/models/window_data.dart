@@ -10,6 +10,8 @@ class WindowData {
   bool isMinimized;
   bool isMaximized;
 
+  final GlobalKey key = GlobalKey();
+
   WindowData({
     required this.id,
     required this.title,

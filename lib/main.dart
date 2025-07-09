@@ -268,15 +268,15 @@ class _WindowManagerState extends State<WindowManager> {
       );
     }
 
+    final topMostIndex = _windows.lastIndexWhere((w) => !w.isMinimized);
+    final activeWindowId = topMostIndex != -1 ? _windows[topMostIndex].id : null;
+
     final sortedWindowsForTaskbar = List<WindowData>.from(_windows);
     sortedWindowsForTaskbar.sort((a, b) {
       final aId = int.tryParse(a.id.split('_').last) ?? 0;
       final bId = int.tryParse(b.id.split('_').last) ?? 0;
       return aId.compareTo(bId);
     });
-
-    final topMostIndex = _windows.lastIndexWhere((w) => !w.isMinimized);
-    final activeWindowId = topMostIndex != -1 ? _windows[topMostIndex].id : null;
 
     return Scaffold(
       backgroundColor: Colors.blueGrey[900],
@@ -291,26 +291,33 @@ class _WindowManagerState extends State<WindowManager> {
           children: [
             Expanded(
               child: Stack(
-                children: _windows.where((w) => !w.isMinimized).map((data) {
-                  final bool isActive = data.id == activeWindowId;
-                  return DraggableWindow(
-                    key: ValueKey(data.id),
-                    id: data.id,
-                    initialPosition: data.position,
-                    initialSize: data.size,
-                    title: data.title,
-                    icon: data.icon,
-                    isActive: isActive,
-                    isMaximized: data.isMaximized,
-                    onBringToFront: _bringToFront,
-                    onMinimize: _minimizeWindow,
-                    onClose: _removeWindow,
-                    onMove: _updateWindowPosition,
-                    onResize: _updateWindowSize,
-                    onMaximizeChanged: _updateWindowMaximizeState,
-                    child: data.child,
-                  );
-                }).toList(),
+                // 使用 collection for 循环来构建子组件列表，以获得更好的性能和稳定性。
+                children: [
+                  for (final data in _windows)
+                    Offstage(
+                      // 使用 Offstage 来隐藏最小化的窗口。
+                      // Offstage 会完整地保留子组件的状态 (state)，即使它不可见。
+                      offstage: data.isMinimized,
+                      child: DraggableWindow(
+                        key: data.key,
+                        id: data.id,
+                        initialPosition: data.position,
+                        initialSize: data.size,
+                        title: data.title,
+                        icon: data.icon,
+                        isActive: data.id == activeWindowId,
+                        isMaximized: data.isMaximized,
+                        isMinimized: data.isMinimized,
+                        onBringToFront: _bringToFront,
+                        onMinimize: _minimizeWindow,
+                        onClose: _removeWindow,
+                        onMove: _updateWindowPosition,
+                        onResize: _updateWindowSize,
+                        onMaximizeChanged: _updateWindowMaximizeState,
+                        child: data.child,
+                      ),
+                    )
+                ],
               ),
             ),
             Taskbar(
