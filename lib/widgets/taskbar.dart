@@ -7,6 +7,7 @@ class Taskbar extends StatefulWidget {
   final String? activeWindowId;
   final Function(String) onWindowIconTap;
   final double height;
+  final String? connectionQuality;
 
   const Taskbar({
     super.key,
@@ -14,6 +15,7 @@ class Taskbar extends StatefulWidget {
     required this.onWindowIconTap,
     this.activeWindowId,
     this.height = 48.0,
+    this.connectionQuality,
   });
 
   @override
@@ -28,7 +30,8 @@ class _TaskbarState extends State<Taskbar> {
   void initState() {
     super.initState();
     _updateTime();
-    _timer = Timer.periodic(const Duration(seconds: 1), (timer) => _updateTime());
+    _timer =
+        Timer.periodic(const Duration(seconds: 1), (timer) => _updateTime());
   }
 
   @override
@@ -49,28 +52,65 @@ class _TaskbarState extends State<Taskbar> {
 
   @override
   Widget build(BuildContext context) {
+    IconData connectionQualityIcon;
+    if(widget.connectionQuality == null || widget.connectionQuality!.isEmpty) {
+      connectionQualityIcon = Icons.network_check;
+    } else {
+      if(widget.connectionQuality!.startsWith('良好')) {
+        connectionQualityIcon = Icons.network_wifi_3_bar;
+      } else if(widget.connectionQuality!.startsWith('一般')) {
+        connectionQualityIcon = Icons.network_wifi_2_bar;
+      } else {
+        connectionQualityIcon = Icons.network_wifi_1_bar;
+      }
+    }
     return Container(
       height: widget.height,
       color: Colors.black.withValues(alpha: 0.8),
       child: Row(
         children: [
+          if (widget.connectionQuality != null &&
+              widget.connectionQuality!.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(left: 16.0),
+              child: Row(
+                children: [
+                  Icon(connectionQualityIcon,
+                      size: 16, color: Colors.white),
+                  const SizedBox(width: 8),
+                  Text(
+                    '连接质量: ${widget.connectionQuality}',
+                    style: const TextStyle(color: Colors.white, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
           const SizedBox(width: 16),
           Expanded(
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: widget.windows.map((window) {
-                final isActive = widget.activeWindowId == window.id && !window.isMinimized;
+                final isActive =
+                    widget.activeWindowId == window.id && !window.isMinimized;
                 return InkWell(
                   onTap: () => widget.onWindowIconTap(window.id),
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 8.0),
-                     decoration: BoxDecoration(
-                      color: isActive ? Colors.white.withValues(alpha: 0.08) : Colors.transparent,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8.0, vertical: 8.0),
+                    decoration: BoxDecoration(
+                      color: isActive
+                          ? Colors.white.withValues(alpha: 0.08)
+                          : Colors.transparent,
                       borderRadius: BorderRadius.circular(4.0),
                     ),
                     child: Tooltip(
                       message: window.title,
-                      child: Icon(window.icon, color: window.isMinimized ? Colors.white.withAlpha(150) : Colors.white.withAlpha(220), size: 24),
+                      child: Icon(
+                          window.icon,
+                          color: window.isMinimized
+                              ? Colors.white.withAlpha(150)
+                              : Colors.white.withAlpha(220),
+                          size: 24),
                     ),
                   ),
                 );
@@ -81,7 +121,10 @@ class _TaskbarState extends State<Taskbar> {
             padding: const EdgeInsets.symmetric(horizontal: 16.0),
             child: Text(
               _currentTime,
-              style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w500),
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500),
             ),
           ),
         ],

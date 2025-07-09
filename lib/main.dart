@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:dartssh2/dartssh2.dart';
 import 'package:flutter/material.dart';
 import 'package:vissh/pages/terminal_page.dart';
@@ -46,11 +47,28 @@ class _WindowManagerState extends State<WindowManager> {
   String _verificationMessage = '连接到服务器...';
   String _verificationFailedMessage = '';
 
+  String _connectionQuality = '';
+  Timer? _connectionQualityTimer;
+
   @override
   void initState() {
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: [SystemUiOverlay.bottom]);
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
+        overlays: [SystemUiOverlay.bottom]);
     super.initState();
     _verifyConnection();
+
+    widget.sshClient.done.then((_) {
+      if (mounted) {
+        _connectionQualityTimer?.cancel();
+        Navigator.of(context).pop('disconnected');
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _connectionQualityTimer?.cancel();
+    super.dispose();
   }
 
   Future<void> _verifyConnection() async {
@@ -61,6 +79,7 @@ class _WindowManagerState extends State<WindowManager> {
         _isVerified = true;
         _setupInitialWindows();
       });
+      _startConnectionQualityChecks();
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -70,21 +89,57 @@ class _WindowManagerState extends State<WindowManager> {
     }
   }
 
+  void _startConnectionQualityChecks() {
+    _connectionQualityTimer =
+        Timer.periodic(const Duration(seconds: 5), (_) {
+      _checkConnectionQuality();
+    });
+  }
+
+  Future<void> _checkConnectionQuality() async {
+    if (!mounted) return;
+    try {
+      final stopwatch = Stopwatch()..start();
+      await widget.sshClient.run('echo');
+      stopwatch.stop();
+      final latency = stopwatch.elapsedMilliseconds;
+
+      String quality;
+      if (latency < 150) {
+        quality = '良好';
+      } else if (latency < 500) {
+        quality = '一般';
+      } else {
+        quality = '差';
+      }
+      if (mounted) {
+        setState(() {
+          _connectionQuality = '$quality (${latency}ms)';
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _connectionQuality = '断开连接';
+        });
+      }
+    }
+  }
+
   void _setupInitialWindows() {
     _addWindow(
       'File Explorer',
       const Offset(100, 100),
       Icons.folder_open,
-      // 使用新的构建器语法
       (id) => const Center(
-        child: Text('View your files...', style: TextStyle(color: Colors.white)),
+        child:
+            Text('View your files...', style: TextStyle(color: Colors.white)),
       ),
     );
     _addWindow(
       'Terminal',
       const Offset(150, 150),
       Icons.terminal,
-      // 使用新的构建器语法，将 id 传入回调
       (id) => TerminalPage(
         credentials: widget.credentials,
         onSessionEnd: () => _removeWindow(id),
@@ -95,7 +150,6 @@ class _WindowManagerState extends State<WindowManager> {
   void _addWindow(String title, Offset position, IconData icon,
       Widget Function(String id) childBuilder) {
     final id = 'window_${_nextWindowId++}';
-    // 在这里一次性创建好 Widget
     final windowChild = childBuilder(id);
     setState(() {
       _windows.add(
@@ -104,7 +158,7 @@ class _WindowManagerState extends State<WindowManager> {
           title: title,
           position: position,
           size: const Size(700, 500),
-          child: windowChild, // 存储创建好的 Widget 实例
+          child: windowChild,
           icon: icon,
         ),
       );
@@ -209,13 +263,15 @@ class _WindowManagerState extends State<WindowManager> {
               children: [
                 const SizedBox(height: 120),
                 hasError
-                    ? const Icon(Icons.error_outline, color: Colors.redAccent, size: 48)
+                    ? const Icon(Icons.error_outline,
+                        color: Colors.redAccent, size: 48)
                     : SizedBox(
                         width: 48,
                         height: 48,
                         child: CircularProgressIndicator(
                           strokeWidth: 3.5,
-                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white.withValues(alpha: 0.8)),
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                              Colors.white.withValues(alpha: 0.8)),
                         ),
                       ),
                 const SizedBox(height: 40),
@@ -249,9 +305,11 @@ class _WindowManagerState extends State<WindowManager> {
                       }
                     },
                     style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 24, vertical: 12),
                       backgroundColor: Colors.white.withValues(alpha: 0.1),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(4)),
                     ),
                     child: const Text(
                       '返回',
@@ -269,7 +327,8 @@ class _WindowManagerState extends State<WindowManager> {
     }
 
     final topMostIndex = _windows.lastIndexWhere((w) => !w.isMinimized);
-    final activeWindowId = topMostIndex != -1 ? _windows[topMostIndex].id : null;
+    final activeWindowId =
+        topMostIndex != -1 ? _windows[topMostIndex].id : null;
 
     final sortedWindowsForTaskbar = List<WindowData>.from(_windows);
     sortedWindowsForTaskbar.sort((a, b) {
@@ -291,12 +350,9 @@ class _WindowManagerState extends State<WindowManager> {
           children: [
             Expanded(
               child: Stack(
-                // 使用 collection for 循环来构建子组件列表，以获得更好的性能和稳定性。
                 children: [
                   for (final data in _windows)
                     Offstage(
-                      // 使用 Offstage 来隐藏最小化的窗口。
-                      // Offstage 会完整地保留子组件的状态 (state)，即使它不可见。
                       offstage: data.isMinimized,
                       child: DraggableWindow(
                         key: data.key,
@@ -324,6 +380,7 @@ class _WindowManagerState extends State<WindowManager> {
               windows: sortedWindowsForTaskbar,
               activeWindowId: activeWindowId,
               onWindowIconTap: _onWindowIconTap,
+              connectionQuality: _connectionQuality,
             ),
           ],
         ),
