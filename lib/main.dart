@@ -291,27 +291,24 @@ class _WindowManagerState extends State<WindowManager> {
           children: [
             Expanded(
               child: Stack(
-                children: _windows.map((data) {
+                children: _windows.where((w) => !w.isMinimized).map((data) {
                   final bool isActive = data.id == activeWindowId;
-                  return Offstage(
-                    offstage: data.isMinimized,
-                    child: DraggableWindow(
-                      key: ValueKey(data.id),
-                      id: data.id,
-                      initialPosition: data.position,
-                      initialSize: data.size,
-                      title: data.title,
-                      icon: data.icon,
-                      isActive: isActive,
-                      isMaximized: data.isMaximized,
-                      onBringToFront: _bringToFront,
-                      onMinimize: _minimizeWindow,
-                      onClose: _removeWindow,
-                      onMove: _updateWindowPosition,
-                      onResize: _updateWindowSize,
-                      onMaximizeChanged: _updateWindowMaximizeState,
-                      child: data.child,
-                    ),
+                  return DraggableWindow(
+                    key: ValueKey(data.id),
+                    id: data.id,
+                    initialPosition: data.position,
+                    initialSize: data.size,
+                    title: data.title,
+                    icon: data.icon,
+                    isActive: isActive,
+                    isMaximized: data.isMaximized,
+                    onBringToFront: _bringToFront,
+                    onMinimize: _minimizeWindow,
+                    onClose: _removeWindow,
+                    onMove: _updateWindowPosition,
+                    onResize: _updateWindowSize,
+                    onMaximizeChanged: _updateWindowMaximizeState,
+                    child: data.child,
                   );
                 }).toList(),
               ),
