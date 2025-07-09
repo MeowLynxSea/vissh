@@ -74,34 +74,37 @@ class _WindowManagerState extends State<WindowManager> {
     _addWindow(
       'File Explorer',
       const Offset(100, 100),
-      (isActive, onSessionEnd) => const Center(
+      Icons.folder_open,
+      // 使用新的构建器语法
+      (id) => const Center(
         child: Text('View your files...', style: TextStyle(color: Colors.white)),
       ),
-      Icons.folder_open,
     );
     _addWindow(
       'Terminal',
       const Offset(150, 150),
-      (isActive, onSessionEnd) => TerminalPage(
-        credentials: widget.credentials,
-        isActive: isActive,
-        onSessionEnd: onSessionEnd,
-      ),
       Icons.terminal,
+      // 使用新的构建器语法，将 id 传入回调
+      (id) => TerminalPage(
+        credentials: widget.credentials,
+        onSessionEnd: () => _removeWindow(id),
+      ),
     );
   }
 
-  void _addWindow(
-      String title, Offset position, Widget Function(bool, VoidCallback) child, IconData icon) {
+  void _addWindow(String title, Offset position, IconData icon,
+      Widget Function(String id) childBuilder) {
+    final id = 'window_${_nextWindowId++}';
+    // 在这里一次性创建好 Widget
+    final windowChild = childBuilder(id);
     setState(() {
-      final id = 'window_${_nextWindowId++}';
       _windows.add(
         WindowData(
           id: id,
           title: title,
           position: position,
           size: const Size(700, 500),
-          child: child,
+          child: windowChild, // 存储创建好的 Widget 实例
           icon: icon,
         ),
       );
@@ -251,7 +254,7 @@ class _WindowManagerState extends State<WindowManager> {
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
                     ),
                     child: const Text(
-                      'Back',
+                      '返回',
                       style: TextStyle(
                         color: Colors.white,
                         fontSize: 16,
@@ -288,24 +291,27 @@ class _WindowManagerState extends State<WindowManager> {
           children: [
             Expanded(
               child: Stack(
-                children: _windows.where((w) => !w.isMinimized).map((data) {
+                children: _windows.map((data) {
                   final bool isActive = data.id == activeWindowId;
-                  return DraggableWindow(
-                    key: ValueKey(data.id),
-                    id: data.id,
-                    initialPosition: data.position,
-                    initialSize: data.size,
-                    title: data.title,
-                    icon: data.icon,
-                    isActive: isActive,
-                    isMaximized: data.isMaximized,
-                    onBringToFront: _bringToFront,
-                    onMinimize: _minimizeWindow,
-                    onClose: _removeWindow,
-                    onMove: _updateWindowPosition,
-                    onResize: _updateWindowSize,
-                    onMaximizeChanged: _updateWindowMaximizeState,
-                    child: data.child,
+                  return Offstage(
+                    offstage: data.isMinimized,
+                    child: DraggableWindow(
+                      key: ValueKey(data.id),
+                      id: data.id,
+                      initialPosition: data.position,
+                      initialSize: data.size,
+                      title: data.title,
+                      icon: data.icon,
+                      isActive: isActive,
+                      isMaximized: data.isMaximized,
+                      onBringToFront: _bringToFront,
+                      onMinimize: _minimizeWindow,
+                      onClose: _removeWindow,
+                      onMove: _updateWindowPosition,
+                      onResize: _updateWindowSize,
+                      onMaximizeChanged: _updateWindowMaximizeState,
+                      child: data.child,
+                    ),
                   );
                 }).toList(),
               ),
@@ -325,14 +331,13 @@ class _WindowManagerState extends State<WindowManager> {
             onPressed: () => _addWindow(
               'Terminal',
               const Offset(150, 150),
-              (isActive, onSessionEnd) => TerminalPage(
-                credentials: widget.credentials,
-                isActive: isActive,
-                onSessionEnd: onSessionEnd,
-              ),
               Icons.terminal,
+              (id) => TerminalPage(
+                credentials: widget.credentials,
+                onSessionEnd: () => _removeWindow(id),
+              ),
             ),
-            tooltip: 'Add New Window',
+            tooltip: 'Start Terminal',
             child: const Icon(Icons.add),
           ),
           const SizedBox(height: 32),

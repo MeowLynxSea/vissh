@@ -8,13 +8,11 @@ import '../models/credentials.dart';
 
 class TerminalPage extends StatefulWidget {
   final SSHCredentials credentials;
-  final bool isActive;
   final VoidCallback onSessionEnd;
 
   const TerminalPage({
     super.key,
     required this.credentials,
-    required this.isActive,
     required this.onSessionEnd,
   });
 
@@ -33,20 +31,10 @@ class _TerminalPageState extends State<TerminalPage> {
     super.initState();
     _startSshShell();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && widget.isActive) {
+      if (mounted) {
         _focusNode.requestFocus();
       }
     });
-  }
-
-  @override
-  void didUpdateWidget(covariant TerminalPage oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.isActive && !oldWidget.isActive) {
-      _focusNode.requestFocus();
-    } else if (!widget.isActive && oldWidget.isActive) {
-      _focusNode.unfocus();
-    }
   }
 
   Future<void> _startSshShell() async {
