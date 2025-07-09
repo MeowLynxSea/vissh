@@ -1,7 +1,9 @@
+import 'package:dartssh2/dartssh2.dart';
 import 'package:flutter/material.dart';
 import 'widgets/draggable_window.dart';
 import 'models/window_data.dart';
 import 'widgets/taskbar.dart';
+import 'pages/login_page.dart';
 
 void main() {
   runApp(const MyApp());
@@ -14,13 +16,15 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      home: const WindowManager(),
+      home: const LoginPage(),
     );
   }
 }
 
 class WindowManager extends StatefulWidget {
-  const WindowManager({super.key});
+  final SSHClient sshClient;
+  final String host;
+  const WindowManager({super.key, required this.sshClient, required this.host});
 
   @override
   State<WindowManager> createState() => _WindowManagerState();
@@ -30,9 +34,34 @@ class _WindowManagerState extends State<WindowManager> {
   final List<WindowData> _windows = [];
   int _nextWindowId = 0;
 
+  bool _isVerified = false;
+  String _verificationMessage = '连接到服务器...';
+  String _verificationFailedMessage = '';
+
   @override
   void initState() {
     super.initState();
+    _verifyConnection();
+  }
+
+  Future<void> _verifyConnection() async {
+    try {
+      await widget.sshClient.run('echo Vissh SSH Connection Verified');
+      if (!mounted) return;
+      setState(() {
+        _isVerified = true;
+        _setupInitialWindows();
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _verificationMessage = '无法登录';
+        _verificationFailedMessage = '请检查服务器地址和凭据，然后重试。\n错误: $e';
+      });
+    }
+  }
+
+  void _setupInitialWindows() {
     _addWindow(
       'File Explorer',
       const Offset(100, 100),
@@ -44,8 +73,9 @@ class _WindowManagerState extends State<WindowManager> {
     _addWindow(
       'Terminal',
       const Offset(150, 150),
-      const Center(
-        child: Text('Run your commands...', style: TextStyle(color: Colors.white)),
+      Center(
+        child: Text('SSH connected to: ${widget.host}',
+            style: const TextStyle(color: Colors.white)),
       ),
       Icons.web,
     );
@@ -72,10 +102,10 @@ class _WindowManagerState extends State<WindowManager> {
     final windowIndex = _windows.indexWhere((w) => w.id == id);
     if (windowIndex != -1) {
       final window = _windows[windowIndex];
-      if(window.isMinimized) {
+      if (window.isMinimized) {
         window.isMinimized = false;
       }
-      
+
       if (windowIndex != _windows.length - 1) {
         final window = _windows.removeAt(windowIndex);
         _windows.add(window);
@@ -92,7 +122,7 @@ class _WindowManagerState extends State<WindowManager> {
       }
     });
   }
-  
+
   void _onWindowIconTap(String id) {
     final windowIndex = _windows.indexWhere((w) => w.id == id);
     if (windowIndex == -1) return;
@@ -132,7 +162,7 @@ class _WindowManagerState extends State<WindowManager> {
   void _updateWindowSize(String id, Size size) {
     final windowIndex = _windows.indexWhere((w) => w.id == id);
     if (windowIndex != -1) {
-       setState(() {
+      setState(() {
         _windows[windowIndex].size = size;
       });
     }
@@ -149,15 +179,100 @@ class _WindowManagerState extends State<WindowManager> {
 
   @override
   Widget build(BuildContext context) {
+    if (!_isVerified) {
+      // --- Win11 风格的验证界面 ---
+      bool hasError = _verificationFailedMessage.isNotEmpty;
+
+      return Scaffold(
+        backgroundColor: const Color(0xff0078D4), // Win11 蓝色背景
+        body: Container(
+            decoration: const BoxDecoration(
+            image: DecorationImage(
+              image: NetworkImage('https://www.meowdream.cn/background.jpg'),
+              fit: BoxFit.cover,
+            ),
+          ),
+          child: Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const SizedBox(height: 120),
+                
+                hasError
+                    ? Icon(Icons.error_outline, color: Colors.redAccent, size: 48)
+                    : SizedBox(
+                        width: 48,
+                        height: 48,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 3.5,
+                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white.withValues(alpha: 0.8)),
+                        ),
+                      ),
+                const SizedBox(height: 40),
+
+                Text(
+                  _verificationMessage,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 24,
+                    fontWeight: FontWeight.w300,
+                  ),
+                ),
+                const SizedBox(height: 10),
+
+                if (hasError)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 40.0),
+                    child: Text(
+                      _verificationFailedMessage,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.8),
+                        fontSize: 14,
+                      ),
+                    ),
+                  ),
+
+                if (hasError)
+                  SizedBox(height: 16),
+
+                if (hasError)
+                  TextButton(
+                    onPressed: () {
+                      if (Navigator.canPop(context)) {
+                        Navigator.of(context).pop();
+                      }
+                    },
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                      backgroundColor: Colors.white.withValues(alpha: 0.1),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                    ),
+                    child: const Text(
+                      '返回',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
     final sortedWindowsForTaskbar = List<WindowData>.from(_windows);
     sortedWindowsForTaskbar.sort((a, b) {
       final aId = int.tryParse(a.id.split('_').last) ?? 0;
       final bId = int.tryParse(b.id.split('_').last) ?? 0;
       return aId.compareTo(bId);
     });
-    
+
     final topMostIndex = _windows.lastIndexWhere((w) => !w.isMinimized);
-    final activeWindowId = topMostIndex != -1 ? _windows[topMostIndex].id : null;
+    final activeWindowId =
+        topMostIndex != -1 ? _windows[topMostIndex].id : null;
 
     return Scaffold(
       backgroundColor: Colors.blueGrey[900],
@@ -209,7 +324,10 @@ class _WindowManagerState extends State<WindowManager> {
             onPressed: () => _addWindow(
               'New Window',
               const Offset(200, 200),
-              const Center(child: Text('This is the new window content area', style: TextStyle(color: Colors.white))),
+              const Center(
+                child: Text('This is the new window content area',
+                style: TextStyle(color: Colors.white))
+              ),
               Icons.add_circle_outline,
             ),
             tooltip: 'Add New Window',
