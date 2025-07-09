@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'widgets/draggable_window.dart';
+import 'models/window_data.dart';
+import 'widgets/taskbar.dart';
 
 void main() {
   runApp(const MyApp());
@@ -7,116 +10,214 @@ void main() {
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
-  // This widget is the root of your application.
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Flutter Demo',
-      theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
-      ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+      debugShowCheckedModeBanner: false,
+      home: const WindowManager(),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
+class WindowManager extends StatefulWidget {
+  const WindowManager({super.key});
 
   @override
-  State<MyHomePage> createState() => _MyHomePageState();
+  State<WindowManager> createState() => _WindowManagerState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+class _WindowManagerState extends State<WindowManager> {
+  final List<WindowData> _windows = [];
+  int _nextWindowId = 0;
 
-  void _incrementCounter() {
+  @override
+  void initState() {
+    super.initState();
+    _addWindow(
+      'File Explorer',
+      const Offset(100, 100),
+      const Center(
+        child: Text('View your files...', style: TextStyle(color: Colors.white)),
+      ),
+      Icons.folder_open,
+    );
+    _addWindow(
+      'Terminal',
+      const Offset(150, 150),
+      const Center(
+        child: Text('Run your commands...', style: TextStyle(color: Colors.white)),
+      ),
+      Icons.web,
+    );
+  }
+
+  void _addWindow(String title, Offset position, Widget child, IconData icon) {
     setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
+      final id = 'window_${_nextWindowId++}';
+      _windows.add(
+        WindowData(
+          id: id,
+          title: title,
+          position: position,
+          size: const Size(400, 300),
+          child: child,
+          icon: icon,
+        ),
+      );
+      _bringToFront(id);
     });
+  }
+
+  void _bringToFront(String id) {
+    final windowIndex = _windows.indexWhere((w) => w.id == id);
+    if (windowIndex != -1) {
+      final window = _windows[windowIndex];
+      if(window.isMinimized) {
+        window.isMinimized = false;
+      }
+      
+      if (windowIndex != _windows.length - 1) {
+        final window = _windows.removeAt(windowIndex);
+        _windows.add(window);
+      }
+      setState(() {});
+    }
+  }
+
+  void _minimizeWindow(String id) {
+    setState(() {
+      final windowIndex = _windows.indexWhere((w) => w.id == id);
+      if (windowIndex != -1) {
+        _windows[windowIndex].isMinimized = true;
+      }
+    });
+  }
+  
+  void _onWindowIconTap(String id) {
+    final windowIndex = _windows.indexWhere((w) => w.id == id);
+    if (windowIndex == -1) return;
+
+    final window = _windows[windowIndex];
+    final topMostIndex = _windows.lastIndexWhere((w) => !w.isMinimized);
+
+    setState(() {
+      if (window.isMinimized) {
+        window.isMinimized = false;
+        _bringToFront(id);
+      } else {
+        if (topMostIndex != -1 && _windows[topMostIndex].id == id) {
+          _minimizeWindow(id);
+        } else {
+          _bringToFront(id);
+        }
+      }
+    });
+  }
+
+  void _removeWindow(String id) {
+    setState(() {
+      _windows.removeWhere((w) => w.id == id);
+    });
+  }
+
+  void _updateWindowPosition(String id, Offset position) {
+    final windowIndex = _windows.indexWhere((w) => w.id == id);
+    if (windowIndex != -1) {
+      setState(() {
+        _windows[windowIndex].position = position;
+      });
+    }
+  }
+
+  void _updateWindowSize(String id, Size size) {
+    final windowIndex = _windows.indexWhere((w) => w.id == id);
+    if (windowIndex != -1) {
+       setState(() {
+        _windows[windowIndex].size = size;
+      });
+    }
+  }
+
+  void _updateWindowMaximizeState(String id, bool isMaximized) {
+    final windowIndex = _windows.indexWhere((w) => w.id == id);
+    if (windowIndex != -1) {
+      setState(() {
+        _windows[windowIndex].isMaximized = isMaximized;
+      });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
+    final sortedWindowsForTaskbar = List<WindowData>.from(_windows);
+    sortedWindowsForTaskbar.sort((a, b) {
+      final aId = int.tryParse(a.id.split('_').last) ?? 0;
+      final bId = int.tryParse(b.id.split('_').last) ?? 0;
+      return aId.compareTo(bId);
+    });
+    
+    final topMostIndex = _windows.lastIndexWhere((w) => !w.isMinimized);
+    final activeWindowId = topMostIndex != -1 ? _windows[topMostIndex].id : null;
+
     return Scaffold(
-      appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
-      ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
+      backgroundColor: Colors.blueGrey[900],
+      body: Container(
+        decoration: const BoxDecoration(
+          image: DecorationImage(
+            image: NetworkImage('https://www.meowdream.cn/background.jpg'),
+            fit: BoxFit.cover,
+          ),
+        ),
         child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            const Text('You have pushed the button this many times:'),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
+          children: [
+            Expanded(
+              child: Stack(
+                children: _windows.where((w) => !w.isMinimized).map((data) {
+                  final bool isActive = data.id == activeWindowId;
+                  return DraggableWindow(
+                    key: ValueKey(data.id),
+                    id: data.id,
+                    initialPosition: data.position,
+                    initialSize: data.size,
+                    title: data.title,
+                    icon: data.icon,
+                    isActive: isActive,
+                    isMaximized: data.isMaximized,
+                    onBringToFront: _bringToFront,
+                    onMinimize: _minimizeWindow,
+                    onClose: _removeWindow,
+                    onMove: _updateWindowPosition,
+                    onResize: _updateWindowSize,
+                    onMaximizeChanged: _updateWindowMaximizeState,
+                    child: data.child,
+                  );
+                }).toList(),
+              ),
+            ),
+            Taskbar(
+              windows: sortedWindowsForTaskbar,
+              activeWindowId: activeWindowId,
+              onWindowIconTap: _onWindowIconTap,
             ),
           ],
         ),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
-      ), // This trailing comma makes auto-formatting nicer for build methods.
+      floatingActionButton: Column(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          FloatingActionButton(
+            onPressed: () => _addWindow(
+              'New Window',
+              const Offset(200, 200),
+              const Center(child: Text('This is the new window content area', style: TextStyle(color: Colors.white))),
+              Icons.add_circle_outline,
+            ),
+            tooltip: 'Add New Window',
+            child: const Icon(Icons.add),
+          ),
+          const SizedBox(height: 32),
+        ]
+      )
     );
   }
 }
