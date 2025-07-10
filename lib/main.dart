@@ -208,18 +208,19 @@ class _WindowManagerState extends State<WindowManager> {
     final window = _windows[windowIndex];
     final topMostIndex = _windows.lastIndexWhere((w) => !w.isMinimized);
 
-    setState(() {
-      if (window.isMinimized) {
+    if (window.isMinimized) {
+      setState(() {
         window.isMinimized = false;
         _bringToFront(id);
+      });
+    } else {
+      if (topMostIndex != -1 && _windows[topMostIndex].id == id) {
+        final windowState = window.key.currentState as DraggableWindowState?;
+        windowState?.animateAndMinimize();
       } else {
-        if (topMostIndex != -1 && _windows[topMostIndex].id == id) {
-          _minimizeWindow(id);
-        } else {
-          _bringToFront(id);
-        }
+        _bringToFront(id);
       }
-    });
+    }
   }
 
   void _removeWindow(String id) {

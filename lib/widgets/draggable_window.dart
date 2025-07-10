@@ -43,10 +43,10 @@ class DraggableWindow extends StatefulWidget {
   });
 
   @override
-  State<DraggableWindow> createState() => _DraggableWindowState();
+  DraggableWindowState createState() => DraggableWindowState();
 }
 
-class _DraggableWindowState extends State<DraggableWindow> {
+class DraggableWindowState extends State<DraggableWindow> {
   late double _top;
   late double _left;
   late double _width;
@@ -131,7 +131,18 @@ class _DraggableWindowState extends State<DraggableWindow> {
     }
   }
 
-  void _animateAndMinimize() {
+  void _animateAndClose() {
+    if (!mounted) return;
+    setState(() {
+      _isClosing = true;
+    });
+
+    Future.delayed(const Duration(milliseconds: 100), () {
+      widget.onClose(widget.id);
+    });
+  }
+
+  void animateAndMinimize() {
     if (!mounted) return;
     setState(() {
       _isClosing = true;
@@ -370,13 +381,13 @@ class _DraggableWindowState extends State<DraggableWindow> {
                 ),
               ),
             ),
-            _buildControlButton(Icons.minimize, _animateAndMinimize, Colors.black12),
+            _buildControlButton(Icons.minimize, animateAndMinimize, Colors.black12),
             _buildControlButton(
               _isMaximized ? Icons.filter_none : Icons.check_box_outline_blank,
               _toggleMaximize,
               Colors.black12
             ),
-            _buildControlButton(Icons.close, () => widget.onClose(widget.id), Colors.redAccent, isLast: true,),
+            _buildControlButton(Icons.close, _animateAndClose, Colors.redAccent, isLast: true,),
           ],
         ),
       ),
