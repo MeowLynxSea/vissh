@@ -8,6 +8,7 @@ import 'package:vissh/widgets/taskbar.dart';
 import 'package:vissh/pages/login_page.dart';
 import 'package:vissh/models/credentials.dart';
 import 'package:flutter/services.dart';
+import 'package:vissh/models/app_data.dart';
 
 void main() {
   runApp(const MyApp());
@@ -50,12 +51,15 @@ class _WindowManagerState extends State<WindowManager> {
   String _connectionQuality = '';
   Timer? _connectionQualityTimer;
 
+  final List<AppData> _apps = [];
+
   @override
   void initState() {
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
         overlays: [SystemUiOverlay.bottom]);
     super.initState();
     _verifyConnection();
+    _initializeAppList();
 
     widget.sshClient.done.then((_) {
       if (mounted) {
@@ -69,6 +73,26 @@ class _WindowManagerState extends State<WindowManager> {
   void dispose() {
     _connectionQualityTimer?.cancel();
     super.dispose();
+  }
+
+  void _initializeAppList() {
+    _apps.add(AppData(
+      id: 'file_explorer',
+      title: 'File Explorer',
+      icon: Icons.folder_open,
+      childBuilder: (id) => const Center(
+        child: Text('View your files...', style: TextStyle(color: Colors.white)),
+      ),
+    ));
+    _apps.add(AppData(
+      id: 'terminal',
+      title: 'Terminal',
+      icon: Icons.terminal,
+      childBuilder: (id) => TerminalPage(
+        credentials: widget.credentials,
+        onSessionEnd: () => _removeWindow(id),
+      ),
+    ));
   }
 
   Future<void> _verifyConnection() async {
@@ -127,39 +151,26 @@ class _WindowManagerState extends State<WindowManager> {
   }
 
   void _setupInitialWindows() {
-    _addWindow(
-      'File Explorer',
-      const Offset(100, 100),
-      Icons.folder_open,
-      (id) => const Center(
-        child:
-            Text('View your files...', style: TextStyle(color: Colors.white)),
-      ),
-    );
-    _addWindow(
-      'Terminal',
-      const Offset(150, 150),
-      Icons.terminal,
-      (id) => TerminalPage(
-        credentials: widget.credentials,
-        onSessionEnd: () => _removeWindow(id),
-      ),
-    );
+    _launchApp('file_explorer', const Offset(100, 100));
+    _launchApp('terminal', const Offset(150, 150));
   }
 
-  void _addWindow(String title, Offset position, IconData icon,
-      Widget Function(String id) childBuilder) {
+  void _launchApp(String appId, [Offset? position]) {
+    final app = _apps.firstWhere((app) => app.id == appId, orElse: () => throw Exception('App not found: $appId'));
     final id = 'window_${_nextWindowId++}';
-    final windowChild = childBuilder(id);
+    final windowChild = app.childBuilder(id);
+    
+    final initialPosition = position ?? Offset(100.0 + (_windows.length * 20), 100.0 + (_windows.length * 20));
+
     setState(() {
       _windows.add(
         WindowData(
           id: id,
-          title: title,
-          position: position,
+          title: app.title,
+          position: initialPosition,
           size: const Size(700, 500),
           child: windowChild,
-          icon: icon,
+          icon: app.icon,
         ),
       );
       _bringToFront(id);
@@ -378,31 +389,14 @@ class _WindowManagerState extends State<WindowManager> {
             ),
             Taskbar(
               windows: sortedWindowsForTaskbar,
+              apps: _apps,
+              onAppLaunch: (appId) => _launchApp(appId),
               activeWindowId: activeWindowId,
               onWindowIconTap: _onWindowIconTap,
               connectionQuality: _connectionQuality,
             ),
           ],
         ),
-      ),
-      floatingActionButton: Column(
-        mainAxisAlignment: MainAxisAlignment.end,
-        children: [
-          FloatingActionButton(
-            onPressed: () => _addWindow(
-              'Terminal',
-              const Offset(150, 150),
-              Icons.terminal,
-              (id) => TerminalPage(
-                credentials: widget.credentials,
-                onSessionEnd: () => _removeWindow(id),
-              ),
-            ),
-            tooltip: 'Start Terminal',
-            child: const Icon(Icons.add),
-          ),
-          const SizedBox(height: 32),
-        ],
       ),
     );
   }
