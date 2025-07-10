@@ -9,6 +9,7 @@ import 'package:vissh/pages/login_page.dart';
 import 'package:vissh/models/credentials.dart';
 import 'package:flutter/services.dart';
 import 'package:vissh/models/app_data.dart';
+import 'package:vissh/pages/task_manager_page.dart';
 
 void main() {
   runApp(const MyApp());
@@ -78,7 +79,7 @@ class _WindowManagerState extends State<WindowManager> {
   void _initializeAppList() {
     _apps.add(AppData(
       id: 'file_explorer',
-      title: 'File Explorer',
+      title: '文件管理器',
       icon: Icons.folder_open,
       childBuilder: (id) => const Center(
         child: Text('View your files...', style: TextStyle(color: Colors.white)),
@@ -86,13 +87,19 @@ class _WindowManagerState extends State<WindowManager> {
     ));
     _apps.add(AppData(
       id: 'terminal',
-      title: 'Terminal',
+      title: '终端',
       icon: Icons.terminal,
       childBuilder: (id) => TerminalPage(
         credentials: widget.credentials,
         onSessionEnd: () => _removeWindow(id),
       ),
     ));
+    _apps.add(AppData(
+    id: 'task_manager',
+    title: '任务管理器',
+    icon: Icons.assessment,
+    childBuilder: (id) => const TaskManagerPage(),
+  ));
   }
 
   Future<void> _verifyConnection() async {
@@ -151,7 +158,6 @@ class _WindowManagerState extends State<WindowManager> {
   }
 
   void _setupInitialWindows() {
-    _launchApp('file_explorer', const Offset(100, 100));
     _launchApp('terminal', const Offset(150, 150));
   }
 
