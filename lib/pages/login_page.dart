@@ -14,6 +14,7 @@ class _LoginPageState extends State<LoginPage> {
   final TextEditingController _hostController = TextEditingController();
   final TextEditingController _usernameController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
+  final TextEditingController _portController = TextEditingController(text: '22');
   bool _isLoading = false;
 
   Future<void> _login() async {
@@ -22,8 +23,9 @@ class _LoginPageState extends State<LoginPage> {
     });
 
     try {
+      final port = int.tryParse(_portController.text) ?? 22;
       final client = SSHClient(
-        await SSHSocket.connect(_hostController.text, 22),
+        await SSHSocket.connect(_hostController.text, port),
         username: _usernameController.text,
         onPasswordRequest: () => _passwordController.text,
       );
@@ -32,6 +34,7 @@ class _LoginPageState extends State<LoginPage> {
         host: _hostController.text,
         username: _usernameController.text,
         password: _passwordController.text,
+        port: port,
       );
 
       if (!mounted) return;
@@ -95,6 +98,19 @@ class _LoginPageState extends State<LoginPage> {
                   style: const TextStyle(color: Colors.white),
                   decoration: const InputDecoration(
                     labelText: '地址',
+                    labelStyle: TextStyle(color: Colors.white70),
+                    enabledBorder: OutlineInputBorder(
+                        borderSide: BorderSide(color: Colors.white70)),
+                    focusedBorder: OutlineInputBorder(
+                        borderSide: BorderSide(color: Colors.white)),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: _portController,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: const InputDecoration(
+                    labelText: '端口',
                     labelStyle: TextStyle(color: Colors.white70),
                     enabledBorder: OutlineInputBorder(
                         borderSide: BorderSide(color: Colors.white70)),

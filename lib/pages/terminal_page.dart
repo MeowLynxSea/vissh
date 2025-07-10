@@ -40,7 +40,7 @@ class _TerminalPageState extends State<TerminalPage> {
   Future<void> _startSshShell() async {
     try {
       client = SSHClient(
-        await SSHSocket.connect(widget.credentials.host, 22),
+        await SSHSocket.connect(widget.credentials.host, widget.credentials.port),
         username: widget.credentials.username,
         onPasswordRequest: () => widget.credentials.password,
       );

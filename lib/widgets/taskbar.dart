@@ -406,8 +406,9 @@ class _StartMenuContentState extends State<_StartMenuContent> {
   Widget build(BuildContext context) {
     final filteredApps = widget.apps.where((app) {
       final titleLower = app.title.toLowerCase();
+      final idLower = app.id.toLowerCase();
       final searchLower = _searchQuery.toLowerCase();
-      return titleLower.contains(searchLower);
+      return titleLower.contains(searchLower) || idLower.contains(searchLower);
     }).toList();
 
     return Material(

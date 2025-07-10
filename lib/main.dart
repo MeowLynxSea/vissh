@@ -81,7 +81,7 @@ class _WindowManagerState extends State<WindowManager> {
       id: 'file_explorer',
       title: '文件管理器',
       icon: Icons.folder_open,
-      childBuilder: (id) => const Center(
+      childBuilder: (id, credentials) => const Center(
         child: Text('View your files...', style: TextStyle(color: Colors.white)),
       ),
     ));
@@ -89,17 +89,17 @@ class _WindowManagerState extends State<WindowManager> {
       id: 'terminal',
       title: '终端',
       icon: Icons.terminal,
-      childBuilder: (id) => TerminalPage(
-        credentials: widget.credentials,
+      childBuilder: (id, credentials) => TerminalPage(
+        credentials: credentials,
         onSessionEnd: () => _removeWindow(id),
       ),
     ));
     _apps.add(AppData(
-    id: 'task_manager',
-    title: '任务管理器',
-    icon: Icons.assessment,
-    childBuilder: (id) => const TaskManagerPage(),
-  ));
+      id: 'task_manager',
+      title: '任务管理器',
+      icon: Icons.assessment,
+      childBuilder: (id, credentials) => TaskManagerPage(credentials: credentials),
+    ));
   }
 
   Future<void> _verifyConnection() async {
@@ -164,7 +164,7 @@ class _WindowManagerState extends State<WindowManager> {
   void _launchApp(String appId, [Offset? position]) {
     final app = _apps.firstWhere((app) => app.id == appId, orElse: () => throw Exception('App not found: $appId'));
     final id = 'window_${_nextWindowId++}';
-    final windowChild = app.childBuilder(id);
+    final windowChild = app.childBuilder(id, widget.credentials);
     
     final initialPosition = position ?? Offset(100.0 + (_windows.length * 20), 100.0 + (_windows.length * 20));
 
