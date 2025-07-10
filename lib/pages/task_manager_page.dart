@@ -36,13 +36,16 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
   int _sortColumnIndex = 0;
   bool _isAscending = true;
 
+  String? _selectedPid;
+  bool _isRunTaskDialogVisible = false;
+
   final List<double> _columnWidths = [250.0, 90.0, 90.0, 90.0, 90.0, 50.0];
   final List<double> _minColumnWidths = [150.0, 90.0, 90.0, 90.0, 90.0, 20.0];
   final List<String> _columnTitles = ['名称', 'PID', 'CPU', '内存', '磁盘', ''];
-  
+
   final double _headerHeight = 56.0;
   final double _rowHeight = 36.0;
-  final double _resizerWidth = 6.0; 
+  final double _resizerWidth = 6.0;
   final Color _borderColor = Colors.white.withValues(alpha: 0.2);
 
   @override
@@ -212,7 +215,7 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
       }
     }
   }
-  
+
   void _sortProcesses() {
     _processes.sort((a, b) {
       int compare;
@@ -241,6 +244,56 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
       }
       _sortProcesses();
     });
+  }
+
+  Future<void> _endSelectedTask() async {
+    if (_client == null || _selectedPid == null) return;
+
+    final pid = _selectedPid;
+
+    try {
+      await _client!.run('kill $pid');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('已向进程 $pid 发送结束信号。')),
+        );
+        setState(() {
+          _selectedPid = null;
+        });
+        await _fetchProcessInfo();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('结束任务 $pid 失败: $e', style: const TextStyle(color: Colors.red))),
+        );
+      }
+    }
+  }
+
+  Future<void> _runNewTask(String command) async {
+    if (_client == null) return;
+    try {
+      final bgCommand = 'nohup $command > /dev/null 2>&1 &';
+      await _client!.run(bgCommand);
+      
+      if (mounted) {
+        setState(() {
+          _isRunTaskDialogVisible = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('任务 "$command" 已在后台运行。')),
+        );
+        await Future.delayed(const Duration(seconds: 1));
+        await _fetchProcessInfo();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('运行任务 "$command" 失败: $e', style: const TextStyle(color: Colors.red))),
+        );
+      }
+    }
   }
 
   @override
@@ -316,40 +369,73 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
   }
 
   Widget _buildPageContent() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    return Stack(
       children: [
-        _buildTopBar(),
-        const SizedBox(height: 16),
-        Expanded(child: _buildResizableProcessTable()),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildTopBar(),
+            const SizedBox(height: 16),
+            Expanded(child: _buildResizableProcessTable()),
+          ],
+        ),
+        if (_isRunTaskDialogVisible)
+          _RunTaskDialog(
+            onRun: _runNewTask,
+            onCancel: () {
+              setState(() {
+                _isRunTaskDialogVisible = false;
+              });
+            },
+          ),
       ],
     );
   }
 
   Widget _buildTopBar() {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        const Text('进程', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600)),
-        Row(
-          children: [
-            OutlinedButton(
-              onPressed: () {},
-              child: const Text('运行新任务', style: TextStyle(color: Colors.white)),
-            ),
-            const SizedBox(width: 8),
-            OutlinedButton(
-              onPressed: () {},
-              child: const Text('结束任务', style: TextStyle(color: Colors.white)),
-            ),
-            const SizedBox(width: 8),
-            IconButton(
-              onPressed: () {},
-              icon: const Icon(Icons.more_horiz, color: Colors.white),
-            )
-          ],
-        )
-      ],
+    return Padding(
+      padding: const EdgeInsets.all(8.0),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          const Text('进程', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600)),
+          Row(
+            children: [
+              OutlinedButton(
+                onPressed: () {
+                  setState(() {
+                    _isRunTaskDialogVisible = true;
+                  });
+                },
+                child: const Text('运行新任务', style: TextStyle(color: Colors.white)),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton(
+                onPressed: _selectedPid == null ? null : _endSelectedTask,
+                style: ButtonStyle(
+                  side: WidgetStateProperty.resolveWith<BorderSide>(
+                    (Set<WidgetState> states) {
+                      if (states.contains(WidgetState.disabled)) {
+                        return BorderSide(color: Colors.grey.withValues(alpha: 0.5));
+                      }
+                      return BorderSide(color: Colors.white.withValues(alpha: 0.5));
+                    },
+                  ),
+                  foregroundColor: WidgetStateProperty.resolveWith<Color?>(
+                    (Set<WidgetState> states) {
+                      if (states.contains(WidgetState.disabled)) {
+                        return Colors.grey.withValues(alpha: 0.8);
+                      }
+                      return Colors.white;
+                    },
+                  ),
+                ),
+                child: const Text('结束任务'),
+              ),
+            ],
+          )
+        ],
+      ),
     );
   }
 
@@ -502,26 +588,41 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
   }
 
   Widget _buildTableRow(ProcessInfo process) {
-    return Container(
-      height: _rowHeight,
-      decoration: BoxDecoration(
-          border: Border(bottom: BorderSide(color: _borderColor.withValues(alpha: 0.1)))),
-      child: Row(
-        children: List.generate(_columnTitles.length, (index) {
-          switch(index) {
-            case 3: return _buildMemoryCell(process, index);
-            case 4: return _buildDiskCell(process, index);
-          }
+    final bool isSelected = process.pid == _selectedPid;
+    return Material(
+      color: isSelected ? Colors.white.withValues(alpha: 0.1) : Colors.transparent,
+      child: InkWell(
+        onTap: () {
+          setState(() {
+            if (isSelected) {
+              _selectedPid = null;
+            } else {
+              _selectedPid = process.pid;
+            }
+          });
+        },
+        child: Container(
+          height: _rowHeight,
+          decoration: BoxDecoration(
+              border: Border(bottom: BorderSide(color: _borderColor.withValues(alpha: 0.1)))),
+          child: Row(
+            children: List.generate(_columnTitles.length, (index) {
+              switch(index) {
+                case 3: return _buildMemoryCell(process, index);
+                case 4: return _buildDiskCell(process, index);
+              }
 
-          String text = '';
-          switch(index) {
-            case 0: text = process.command; break;
-            case 1: text = process.pid; break;
-            case 2: text = '${process.cpuUsage.toStringAsFixed(1)}%'; break;
-            default: text = ''; break;
-          }
-          return _buildTableCell(Text(text), index);
-        }),
+              String text = '';
+              switch(index) {
+                case 0: text = process.command; break;
+                case 1: text = process.pid; break;
+                case 2: text = '${process.cpuUsage.toStringAsFixed(1)}%'; break;
+                default: text = ''; break;
+              }
+              return _buildTableCell(Text(text), index);
+            }),
+          ),
+        ),
       ),
     );
   }
@@ -652,6 +753,100 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
                           ),
                         ),
                       ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+
+class _RunTaskDialog extends StatefulWidget {
+  final Function(String) onRun;
+  final VoidCallback onCancel;
+
+  const _RunTaskDialog({required this.onRun, required this.onCancel});
+
+  @override
+  State<_RunTaskDialog> createState() => _RunTaskDialogState();
+}
+
+class _RunTaskDialogState extends State<_RunTaskDialog> {
+  final _commandController = TextEditingController();
+
+  @override
+  void dispose() {
+    _commandController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned.fill(
+      child: GestureDetector(
+        onTap: widget.onCancel,
+        child: Material(
+          color: Colors.black.withValues(alpha: 0.5),
+          child: Center(
+            child: GestureDetector(
+              onTap: () {},
+              child: Container(
+                width: 350,
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF2B2B2B),
+                  borderRadius: BorderRadius.circular(8),
+                   boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.5),
+                      blurRadius: 10,
+                    )
+                  ]
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('运行新任务', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 20),
+                    TextField(
+                      controller: _commandController,
+                      autofocus: true,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        hintText: '输入要运行的指令',
+                        hintStyle: TextStyle(color: Colors.grey[600]),
+                        enabledBorder: UnderlineInputBorder(
+                          borderSide: BorderSide(color: Colors.grey[700]!),
+                        ),
+                        focusedBorder: const UnderlineInputBorder(
+                          borderSide: BorderSide(color: Colors.white),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        TextButton(
+                          onPressed: widget.onCancel,
+                          child: const Text('取消', style: TextStyle(color: Colors.white70)),
+                        ),
+                        const SizedBox(width: 8),
+                        ElevatedButton(
+                          onPressed: () {
+                            if (_commandController.text.isNotEmpty) {
+                              widget.onRun(_commandController.text);
+                            }
+                          },
+                          child: const Text('运行'),
+                        ),
+                      ],
+                    )
                   ],
                 ),
               ),
