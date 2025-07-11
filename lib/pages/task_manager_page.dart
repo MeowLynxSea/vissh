@@ -26,12 +26,26 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
   double _totalMemUsage = 0.0;
   double _totalDiskPercentage = 0.0;
 
+  CpuStaticInfo? _cpuStaticInfo;
+  CpuDynamicInfo _cpuDynamicInfo = CpuDynamicInfo.initial();
+  List<List<double>> _perCpuHistory = [];
+  List<int>? _lastTotalCpuTimes;
+  List<List<int>>? _lastPerCpuTimes;
+
+  int? _totalMemoryKB;
+  
+  int _selectedPerformanceMetricIndex = 0;
+  final Map<String, List<double>> _metricHistory = {
+    'cpu': [],
+    'memory': [],
+    'disk': [],
+    'network': [0.0],
+  };
+
   bool _isLoading = true;
   String? _errorMessage;
   Timer? _refreshTimer;
-  final int _refreshInterval = 5;
-
-  int? _totalMemoryKB;
+  final int _refreshInterval = 3;
 
   int _sortColumnIndex = 0;
   bool _isAscending = true;
@@ -55,6 +69,7 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
     _refreshTimer = Timer.periodic(Duration(seconds: _refreshInterval), (timer) {
       if (mounted) {
         _fetchProcessInfo();
+        _fetchCpuPerformanceInfo();
       }
     });
   }
@@ -74,6 +89,8 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
         username: widget.credentials.username,
         onPasswordRequest: () => widget.credentials.password,
       );
+      await _fetchCpuStaticInfo(); 
+      await _fetchCpuPerformanceInfo();
       await _getTotalMemory();
       await _fetchProcessInfo();
     } catch (e) {
@@ -97,6 +114,175 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
         _totalMemoryKB = int.tryParse(parts[1]);
       }
     } catch (e) { /* ... */ }
+  }
+
+  Future<void> _fetchCpuStaticInfo() async {
+    if (_client == null) return;
+    try {
+      final result = await _client!.run('lscpu');
+      final output = utf8.decode(result);
+      final lines = output.split('\n');
+      final cpuMap = <String, String>{};
+      for (var line in lines) {
+        final parts = line.split(':');
+        if (parts.length == 2) {
+          cpuMap[parts[0].trim()] = parts[1].trim();
+        }
+      }
+
+      String modelName = cpuMap['Model name'] ?? '未知';
+      final baseSpeedMatch = RegExp(r'@\s*([\d.]+GHz)').firstMatch(modelName);
+      final baseSpeed = baseSpeedMatch?.group(1) ?? '${(double.tryParse(cpuMap['CPU max MHz'] ?? '0') ?? 0) / 1000} GHz';
+      
+      final threads = int.tryParse(cpuMap['CPU(s)'] ?? '0') ?? 0;
+
+      setState(() {
+        _cpuStaticInfo = CpuStaticInfo(
+          modelName: modelName.split('@')[0].trim(),
+          architecture: cpuMap['Architecture'] ?? '未知',
+          baseSpeed: baseSpeed,
+          sockets: int.tryParse(cpuMap['Socket(s)'] ?? '1') ?? 1,
+          cores: int.tryParse(cpuMap['Core(s) per socket'] ?? '0') ?? 0,
+          threads: threads,
+          virtualization: cpuMap['Virtualization'] ?? '不支持',
+          l1dCache: cpuMap['L1d cache'] ?? 'N/A',
+          l1iCache: cpuMap['L1i cache'] ?? 'N/A',
+          l2Cache: cpuMap['L2 cache'] ?? 'N/A',
+          l3Cache: cpuMap['L3 cache'] ?? 'N/A',
+        );
+        _perCpuHistory = List.generate(threads, (_) => []);
+      });
+    } catch (e) { /* ... */ }
+  }
+
+  Future<double> _fetchCpuSpeed() async {
+    if (_client == null) return 0.0;
+
+    try {
+      final result = await _client!.run('cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq');
+      final speedKHz = double.tryParse(utf8.decode(result).trim()) ?? 0.0;
+      if (speedKHz > 0) return speedKHz / 1000000.0;
+    } catch (e) { /* ... */ }
+
+    try {
+      final result = await _client!.run('lscpu');
+      final output = utf8.decode(result);
+      final lines = output.split('\n');
+      final mhzLine = lines.firstWhere(
+        (line) => line.contains('CPU MHz:'),
+        orElse: () => '',
+      );
+      if (mhzLine.isNotEmpty) {
+        final speedMHz = double.tryParse(mhzLine.split(':').last.trim()) ?? 0.0;
+        if (speedMHz > 0) return speedMHz / 1000.0;
+      }
+    } catch (e) { /* ... */ }
+
+    try {
+      final result = await _client!.run('cat /proc/cpuinfo | grep "cpu MHz" | head -n 1');
+      final output = utf8.decode(result);
+      if (output.isNotEmpty) {
+          final speedMHz = double.tryParse(output.split(':').last.trim()) ?? 0.0;
+          if (speedMHz > 0) return speedMHz / 1000.0;
+      }
+    } catch (e) { /* ... */ }
+
+    return 0.0;
+  }
+  
+  Future<void> _fetchCpuPerformanceInfo() async {
+    if (_client == null) return;
+    try {
+      final double currentSpeed = await _fetchCpuSpeed();
+
+      const command = 'cat /proc/stat && echo "---" && cat /proc/uptime && echo "---" && cat /proc/sys/fs/file-nr | awk \'{print \$1}\' && echo "---" && ps -eLf --no-headers | wc -l';
+      final result = await _client!.run(command);
+      final parts = utf8.decode(result).split('---');
+      if (parts.length < 4) return;
+
+      final statLines = parts[0].trim().split('\n');
+      final cpuLines = statLines.where((line) => line.startsWith('cpu')).toList();
+      if (cpuLines.isEmpty) return;
+      
+      final totalCpuTimes = cpuLines[0].split(RegExp(r'\s+')).sublist(1).map((e) => int.tryParse(e) ?? 0).toList();
+      double totalCpuUsage = 0;
+      if (_lastTotalCpuTimes != null) {
+        totalCpuUsage = _calculateCpuUsage(totalCpuTimes, _lastTotalCpuTimes!);
+      }
+      _lastTotalCpuTimes = totalCpuTimes;
+      _updateHistory('cpu', totalCpuUsage.clamp(0.0, 100.0));
+
+      final perCpuTimes = <List<int>>[];
+      if (cpuLines.length > 1) {
+        for(int i = 1; i < cpuLines.length; i++) {
+          final coreTimes = cpuLines[i].split(RegExp(r'\s+')).sublist(1).map((e) => int.tryParse(e) ?? 0).toList();
+          perCpuTimes.add(coreTimes);
+          if (_lastPerCpuTimes != null && _lastPerCpuTimes!.length > (i - 1)) {
+            final coreUsage = _calculateCpuUsage(coreTimes, _lastPerCpuTimes![i-1]);
+            if(_perCpuHistory.length > (i - 1)) {
+              var history = _perCpuHistory[i-1];
+              history.add(coreUsage.clamp(0.0, 100.0));
+              if (history.length > 60) {
+                 history.removeAt(0);
+              }
+              _perCpuHistory[i-1] = List.from(history);
+            }
+          } else {
+            if(_perCpuHistory.length > (i - 1)) {
+              _perCpuHistory[i-1] = [0.0];
+            }
+          }
+        }
+        _lastPerCpuTimes = perCpuTimes;
+      }
+      
+      final uptimeSecondsStr = parts[1].trim().split(' ')[0];
+      final totalSeconds = double.tryParse(uptimeSecondsStr)?.toInt() ?? 0;
+      final days = totalSeconds ~/ (24 * 3600);
+      final hours = (totalSeconds % (24 * 3600)) ~/ 3600;
+      final minutes = (totalSeconds % 3600) ~/ 60;
+      final seconds = totalSeconds % 60;
+      final uptimeStr = '$days:${hours.toString().padLeft(2, '0')}:${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+
+      final handles = int.tryParse(parts[2].trim()) ?? 0;
+      final totalThreads = int.tryParse(parts[3].trim()) ?? 0;
+      
+      if (mounted) {
+        setState(() {
+          _totalCpuUsage = totalCpuUsage;
+          _cpuDynamicInfo = CpuDynamicInfo(
+            currentSpeed: currentSpeed,
+            utilization: totalCpuUsage,
+            processes: _processes.length,
+            threads: totalThreads,
+            handles: handles,
+            uptime: uptimeStr
+          );
+        });
+      }
+    } catch (e) {
+      print('获取CPU动态信息失败: $e');
+    }
+  }
+
+  double _calculateCpuUsage(List<int> current, List<int> previous) {
+    final prevIdle = previous[3] + previous[4];
+    final idle = current[3] + current[4];
+
+    num prevNonIdle = 0;
+    for (var i in [0, 1, 2, 5, 6, 7]) { prevNonIdle += previous.length > i ? previous[i] : 0; }
+    num nonIdle = 0;
+    for (var i in [0, 1, 2, 5, 6, 7]) { nonIdle += current.length > i ? current[i] : 0; }
+
+    final prevTotal = prevIdle + prevNonIdle;
+    final total = idle + nonIdle;
+
+    final totalDiff = total - prevTotal;
+    final idleDiff = idle - prevIdle;
+
+    if (totalDiff == 0) return 0.0;
+    
+    return ((totalDiff - idleDiff) / totalDiff) * 100.0;
   }
 
   Future<void> _fetchProcessInfo() async {
@@ -127,16 +313,20 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
       final lines = output.trim().split('\n');
 
       var tempProcesses = <Map<String, dynamic>>[];
-      double tempTotalCpu = 0;
       double tempTotalMem = 0;
       double totalCurrentDiskSpeed = 0;
+
+      final int cpuThreads = _cpuStaticInfo?.threads ?? 1;
 
       for (var line in lines) {
         final parts = line.split('|');
         if (parts.length < 7) continue;
 
         final pid = parts[0];
-        final cpuUsage = double.tryParse(parts[2]) ?? 0.0;
+        
+        final rawCpuUsage = double.tryParse(parts[2]) ?? 0.0;
+        final cpuUsage = (cpuThreads > 0) ? (rawCpuUsage / cpuThreads) : rawCpuUsage;
+        
         final memUsagePercent = double.tryParse(parts[3]) ?? 0.0;
         
         final readBytes = int.tryParse(parts[5]) ?? 0;
@@ -150,7 +340,6 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
           diskSpeed = (readDiff + writeDiff) / _refreshInterval;
         }
 
-        tempTotalCpu += cpuUsage;
         tempTotalMem += memUsagePercent;
         totalCurrentDiskSpeed += (diskSpeed < 0 ? 0 : diskSpeed);
 
@@ -200,10 +389,12 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
 
       if (mounted) {
         setState(() { 
-          _totalCpuUsage = tempTotalCpu;
           _totalMemUsage = tempTotalMem;
           _totalDiskPercentage = (totalCurrentDiskSpeed / maxScaleSpeed) * 100;
-          _isLoading = false; 
+          _isLoading = false;
+
+          _updateHistory('memory', _totalMemUsage);
+          _updateHistory('disk', _totalDiskPercentage > 100 ? 100 : _totalDiskPercentage);
         });
       }
     } catch (e) {
@@ -213,6 +404,17 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
           _isLoading = false;
         });
       }
+    }
+  }
+
+  void _updateHistory(String key, double value) {
+    const historyLength = 60;
+    if (!_metricHistory.containsKey(key)) {
+      _metricHistory[key] = [];
+    }
+    _metricHistory[key]!.add(value);
+    if (_metricHistory[key]!.length > historyLength) {
+      _metricHistory[key]!.removeAt(0);
     }
   }
 
@@ -303,69 +505,271 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
 
     return Scaffold(
       backgroundColor: Colors.transparent,
-      body: Row(
-        children: <Widget>[
-          AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
-            curve: Curves.easeInOut,
-            width: _isExpanded ? expandedWidth : collapsedWidth,
-            child: ClipRRect(
-              child: Container(
-                decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.04),
-                    border: Border(
-                        right: BorderSide(
-                            color: Colors.white.withValues(alpha: 0.2)))),
-                child: Column(
-                  children: [
-                    const SizedBox(height: 8),
-                    IconButton(
-                      icon: Icon(
-                        _isExpanded ? Icons.menu_open : Icons.menu,
-                        color: Colors.white,
-                        size: 20,
-                      ),
-                      tooltip: _isExpanded ? '收起' : '展开',
-                      onPressed: () {
-                        setState(() {
-                          _isExpanded = !_isExpanded;
-                        });
-                      },
+      body: Stack(
+        children: [
+          Row(
+            children: [
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                curve: Curves.easeInOut,
+                width: _isExpanded ? expandedWidth : collapsedWidth,
+                child: ClipRRect(
+                  child: Container(
+                    decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.04),
+                        border: Border(
+                            right: BorderSide(
+                                color: Colors.white.withValues(alpha: 0.2)))),
+                    child: Column(
+                      children: [
+                        const SizedBox(height: 8),
+                        IconButton(
+                          icon: Icon(
+                            _isExpanded ? Icons.menu_open : Icons.menu,
+                            color: Colors.white,
+                            size: 20,
+                          ),
+                          tooltip: _isExpanded ? '收起' : '展开',
+                          onPressed: () {
+                            setState(() {
+                              _isExpanded = !_isExpanded;
+                            });
+                          },
+                        ),
+                        const SizedBox(height: 8),
+                        _buildNavItem(icon: Icons.apps, text: '应用', index: 0),
+                        _buildNavItem(
+                            icon: Icons.bar_chart, text: '性能', index: 1),
+                        _buildNavItem(
+                            icon: Icons.settings_applications,
+                            text: '服务',
+                            index: 2),
+                      ],
                     ),
-                    const SizedBox(height: 8),
-                    _buildNavItem(icon: Icons.apps, text: '应用', index: 0),
-                    _buildNavItem(
-                        icon: Icons.bar_chart, text: '性能', index: 1),
-                    _buildNavItem(
-                        icon: Icons.settings_applications,
-                        text: '服务',
-                        index: 2),
-                  ],
+                  ),
                 ),
               ),
-            ),
+              Expanded(
+                child: Padding(
+                    padding: const EdgeInsets.all(8.0),
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 200),
+                      transitionBuilder: (Widget child, Animation<double> animation) {
+                        return FadeTransition(
+                          opacity: animation,
+                          child: child,
+                        );
+                      },
+                      child: switch (_selectedIndex) {
+                        0 => KeyedSubtree(key: const ValueKey<int>(0), child: _buildPageContent()),
+                        1 => KeyedSubtree(key: const ValueKey<int>(1), child: _buildPerformancePage()),
+                        _ => KeyedSubtree(
+                            key: const ValueKey<int>(2),
+                            child: const Center(
+                              child: Text("服务页面", style: TextStyle(color: Colors.white)),
+                            ),
+                          ),
+                      },
+                    )),
+              ),
+            ],
           ),
-          Expanded(
-            child: Padding(
-                padding: const EdgeInsets.all(8.0),
-                child: IndexedStack(
-                  index: _selectedIndex,
-                  children: [
-                    _buildPageContent(),
-                    const Placeholder(
-                        child: Center(
-                            child: Text("性能页面",
-                                style: TextStyle(color: Colors.white)))),
-                    const Placeholder(
-                        child: Center(
-                            child: Text("服务页面",
-                                style: TextStyle(color: Colors.white)))),
-                  ],
-                )),
+          if (_isRunTaskDialogVisible)
+            _RunTaskDialog(
+              onRun: _runNewTask,
+              onCancel: () {
+                setState(() {
+                  _isRunTaskDialogVisible = false;
+                });
+              },
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPerformancePage() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildPerformanceTopBar(),
+        Expanded(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _buildPerformanceSidebar(),
+              Expanded(
+                child: _buildPerformanceDetails(),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPerformanceTopBar() {
+    return Padding(
+      padding: const EdgeInsets.all(8.0),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          const Text('性能', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600)),
+          Row(
+            children: [
+              OutlinedButton(
+                onPressed: () {
+                  setState(() {
+                    _isRunTaskDialogVisible = true;
+                  });
+                },
+                child: const Text('运行新任务', style: TextStyle(color: Colors.white)),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton(
+                onPressed: () => {},
+                style: ButtonStyle(
+                  side: WidgetStateProperty.resolveWith<BorderSide>(
+                    (Set<WidgetState> states) {
+                      if (states.contains(WidgetState.disabled)) {
+                        return BorderSide(color: Colors.grey.withValues(alpha: 0.5));
+                      }
+                      return BorderSide(color: Colors.white.withValues(alpha: 0.5));
+                    },
+                  ),
+                  foregroundColor: WidgetStateProperty.resolveWith<Color?>(
+                    (Set<WidgetState> states) {
+                      if (states.contains(WidgetState.disabled)) {
+                        return Colors.grey.withValues(alpha: 0.8);
+                      }
+                      return Colors.white;
+                    },
+                  ),
+                ),
+                child: const Text('复制'),
+              ),
+            ],
+          )
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPerformanceSidebar() {
+    final cpuUtilization = _totalCpuUsage > 100.0 ? 100.0 : _totalCpuUsage;
+    final memoryUtilization = _totalMemUsage;
+    final diskUtilization = _totalDiskPercentage > 100.0 ? 100.0 : _totalDiskPercentage;
+
+    final totalMemoryGB = _totalMemoryKB != null ? (_totalMemoryKB! / (1024 * 1024)) : 0.0;
+    final usedMemoryGB = totalMemoryGB * (memoryUtilization / 100);
+    
+    return Container(
+      width: 280, 
+      padding: const EdgeInsets.only(top: 8.0),
+      color: Colors.white.withValues(alpha: 0.02),
+      child: ListView(
+        children: [
+          _buildMetricTile(
+            index: 0,
+            title: 'CPU',
+            utilization: cpuUtilization,
+            detailsLine1: "${cpuUtilization.toStringAsFixed(0)}%",
+            detailsLine2: "${_cpuDynamicInfo.currentSpeed.toStringAsFixed(2)} GHz",
+            historyData: _metricHistory['cpu'] ?? [],
+            color: const Color(0xFF1B66B1),
+          ),
+          _buildMetricTile(
+            index: 1,
+            title: '内存',
+            utilization: memoryUtilization,
+            detailsLine1: "${usedMemoryGB.toStringAsFixed(1)}/${totalMemoryGB.toStringAsFixed(1)} GB",
+            detailsLine2: "${memoryUtilization.toStringAsFixed(0)}%",
+            historyData: _metricHistory['memory'] ?? [],
+            color: const Color(0xFF8635A8),
+          ),
+           _buildMetricTile(
+            index: 2,
+            title: '磁盘 0 (E:)',
+            utilization: diskUtilization,
+            detailsLine1: "SSD (NVMe)",
+            detailsLine2: "${diskUtilization.toStringAsFixed(0)}%", 
+            historyData: _metricHistory['disk'] ?? [],
+            color: const Color(0xFF4E731C),
+          ),
+           _buildMetricTile(
+            index: 3,
+            title: 'Wi-Fi',
+            utilization: 5.0,
+            detailsLine1: "WLAN",
+            detailsLine2: "发送: 56.0 接收: 72.0 Kbps",
+            historyData: _metricHistory['network'] ?? [],
+            color: const Color(0xFFB86A1A),
           ),
         ],
       ),
     );
+  }
+
+  Widget _buildMetricTile({
+    required int index,
+    required String title,
+    required double utilization,
+    required String detailsLine1,
+    required String detailsLine2,
+    required List<double> historyData,
+    required Color color,
+  }) {
+    final isSelected = _selectedPerformanceMetricIndex == index;
+
+    return InkWell(
+      onTap: () {
+        setState(() {
+          _selectedPerformanceMetricIndex = index;
+        });
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+        margin: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
+        decoration: BoxDecoration(
+          color: isSelected ? Colors.white.withValues(alpha: 0.08) : Colors.transparent,
+          borderRadius: BorderRadius.circular(4.0),
+          border: isSelected ? Border(left: BorderSide(color: color, width: 2)) : null,
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 50,
+              height: 50,
+              decoration: BoxDecoration(
+                border: Border.all(color: color.withValues(alpha: 0.5)),
+              ),
+              child: CustomPaint(
+                painter: SparklinePainter(data: historyData, color: color),
+              ),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500)),
+                  const SizedBox(height: 2),
+                  Text(detailsLine1, style: TextStyle(color: Colors.grey[500], fontSize: 11)),
+                  Text(detailsLine2, style: TextStyle(color: Colors.grey[500], fontSize: 11), overflow: TextOverflow.ellipsis,),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPerformanceDetails() {
+    return switch (_selectedPerformanceMetricIndex) {
+      0 => _buildCpuDetailsPage(),
+      _ => _buildPlaceholderDetailsPage(),
+    };
   }
 
   Widget _buildPageContent() {
@@ -389,6 +793,180 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
             },
           ),
       ],
+    );
+  }
+
+  Widget _buildCpuDetailsPage() {
+    if (_cpuStaticInfo == null) {
+      return const Center(child: Text('正在加载CPU信息...', style: TextStyle(color: Colors.white70)));
+    }
+
+    final titleStyle = const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.w300);
+
+    return ListView(
+      padding: const EdgeInsets.all(24),
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('CPU', style: titleStyle),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Text(
+                _cpuStaticInfo!.modelName,
+                style: titleStyle.copyWith(fontSize: 16, height: 1.8),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+
+        GridView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+            maxCrossAxisExtent: 150,
+            mainAxisSpacing: 8,
+            crossAxisSpacing: 8,
+            childAspectRatio: 2,
+          ),
+          itemCount: _cpuStaticInfo!.threads,
+          itemBuilder: (context, index) {
+            return Container(
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.white.withValues(alpha: 0.2)),
+              ),
+              child: CustomPaint(
+                painter: SparklinePainter(
+                  data: _perCpuHistory.length > index ? _perCpuHistory[index] : [],
+                  color: const Color(0xFF1B66B1),
+                ),
+              ),
+            );
+          },
+        ),
+        const SizedBox(height: 24),
+
+        IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                flex: 2,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        _buildStatItem('利用率', '${_cpuDynamicInfo.utilization.toStringAsFixed(0)} %'),
+                        SizedBox(width: 16),
+                        _buildStatItem('速度', '${_cpuDynamicInfo.currentSpeed.toStringAsFixed(2)} GHz'),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        _buildStatItem('进程', _cpuDynamicInfo.processes.toString()),
+                         SizedBox(width: 16),
+                        _buildStatItem('线程', _cpuDynamicInfo.threads.toString()),
+                         SizedBox(width: 16),
+                        _buildStatItem('句柄', _cpuDynamicInfo.handles.toString()),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    _buildStatItem('正常运行时间', _cpuDynamicInfo.uptime, isLast: true),
+                  ],
+                ),
+              ),
+              const VerticalDivider(color: Colors.white24, thickness: 1),
+              Expanded(
+                flex: 3,
+                child: Padding(
+                  padding: const EdgeInsets.only(left: 16.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _buildHardwareInfoItem('基准速度:', _cpuStaticInfo!.baseSpeed),
+                      _buildHardwareInfoItem('插槽:', _cpuStaticInfo!.sockets.toString()),
+                      _buildHardwareInfoItem('内核:', _cpuStaticInfo!.cores.toString()),
+                      _buildHardwareInfoItem('逻辑处理器:', _cpuStaticInfo!.threads.toString()),
+                      _buildHardwareInfoItem('虚拟化:', _cpuStaticInfo!.virtualization),
+                      _buildHardwareInfoItem('L1 缓存:', '${_cpuStaticInfo!.l1dCache} (D) / ${_cpuStaticInfo!.l1iCache} (I)'),
+                      _buildHardwareInfoItem('L2 缓存:', _cpuStaticInfo!.l2Cache),
+                      _buildHardwareInfoItem('L3 缓存:', _cpuStaticInfo!.l3Cache),
+                    ],
+                  ),
+                ),
+              )
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildStatItem(String label, String value, {bool isLast = false}) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: isLast ? 0 : 4.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(value, style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w500)),
+          Text(label, style: TextStyle(color: Colors.grey[400], fontSize: 12)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHardwareInfoItem(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4.0),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: TextStyle(color: Colors.grey[400], fontSize: 12)),
+          Text(value, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w500)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPlaceholderDetailsPage() {
+    String title;
+    switch (_selectedPerformanceMetricIndex) {
+      case 1: title = '内存'; break;
+      case 2: title = '磁盘 0 (E:)'; break;
+      case 3: title = 'Wi-Fi'; break;
+      default: title = '详情';
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(24.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.w300),
+          ),
+          const SizedBox(height: 20),
+          Expanded(
+            child: Container(
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.white.withValues(alpha: 0.3)),
+              ),
+              child: Center(
+                child: Text(
+                  '详细图表和统计信息占位符',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.white.withValues(alpha: 0.7)),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -855,5 +1433,63 @@ class _RunTaskDialogState extends State<_RunTaskDialog> {
         ),
       ),
     );
+  }
+}
+
+class SparklinePainter extends CustomPainter {
+  final List<double> data;
+  final Color color;
+
+  SparklinePainter({required this.data, required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (data.length < 2) return;
+
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.0;
+    
+    final fillPaint = Paint()
+      ..shader = LinearGradient(
+        colors: [color.withValues(alpha: 0.3), color.withValues(alpha: 0.05)],
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+      ).createShader(Rect.fromLTWH(0, 0, size.width, size.height))
+      ..style = PaintingStyle.fill;
+
+    const maxValue = 100.0;
+    
+    final path = Path();
+    final fillPath = Path();
+
+    double stepX = size.width / (data.length - 1);
+
+    for (int i = 0; i < data.length; i++) {
+      double value = data[i].clamp(0.0, maxValue);
+      double x = i * stepX;
+      double y = size.height - (value / maxValue * size.height);
+
+      if (i == 0) {
+        path.moveTo(x, y);
+        fillPath.moveTo(x, size.height);
+        fillPath.lineTo(x, y);
+      } else {
+        path.lineTo(x, y);
+        fillPath.lineTo(x, y);
+      }
+    }
+
+    fillPath.lineTo(size.width, size.height);
+    fillPath.close();
+
+    canvas.drawPath(fillPath, fillPaint);
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant SparklinePainter oldDelegate) {
+    return oldDelegate.data != data || oldDelegate.color != color;
   }
 }
