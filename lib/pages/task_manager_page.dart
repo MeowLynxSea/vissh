@@ -62,6 +62,9 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
   final double _resizerWidth = 6.0;
   final Color _borderColor = Colors.white.withValues(alpha: 0.2);
 
+  final ScrollController _horizontalScrollController = ScrollController();
+  final ScrollController _verticalScrollController = ScrollController();
+
   @override
   void initState() {
     super.initState();
@@ -78,6 +81,8 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
   void dispose() {
     _refreshTimer?.cancel();
     _client?.close();
+    _horizontalScrollController.dispose();
+    _verticalScrollController.dispose();
     super.dispose();
   }
 
@@ -803,106 +808,113 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
 
     final titleStyle = const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.w300);
 
-    return ListView(
-      padding: const EdgeInsets.all(24),
-      children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('CPU', style: titleStyle),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Text(
-                _cpuStaticInfo!.modelName,
-                style: titleStyle.copyWith(fontSize: 16, height: 1.8),
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 16),
-
-        GridView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-            maxCrossAxisExtent: 150,
-            mainAxisSpacing: 8,
-            crossAxisSpacing: 8,
-            childAspectRatio: 2,
-          ),
-          itemCount: _cpuStaticInfo!.threads,
-          itemBuilder: (context, index) {
-            return Container(
-              decoration: BoxDecoration(
-                border: Border.all(color: Colors.white.withValues(alpha: 0.2)),
-              ),
-              child: CustomPaint(
-                painter: SparklinePainter(
-                  data: _perCpuHistory.length > index ? _perCpuHistory[index] : [],
-                  color: const Color(0xFF1B66B1),
-                ),
-              ),
-            );
-          },
-        ),
-        const SizedBox(height: 24),
-
-        IntrinsicHeight(
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+    return Scrollbar(
+      controller: _verticalScrollController,
+      child: ListView(
+        controller: _verticalScrollController,
+        padding: const EdgeInsets.all(24),
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
             children: [
+              Text('CPU', style: titleStyle),
+              const SizedBox(width: 16),
               Expanded(
-                flex: 2,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        _buildStatItem('利用率', '${_cpuDynamicInfo.utilization.toStringAsFixed(0)} %'),
-                        SizedBox(width: 16),
-                        _buildStatItem('速度', '${_cpuDynamicInfo.currentSpeed.toStringAsFixed(2)} GHz'),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        _buildStatItem('进程', _cpuDynamicInfo.processes.toString()),
-                         SizedBox(width: 16),
-                        _buildStatItem('线程', _cpuDynamicInfo.threads.toString()),
-                         SizedBox(width: 16),
-                        _buildStatItem('句柄', _cpuDynamicInfo.handles.toString()),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    _buildStatItem('正常运行时间', _cpuDynamicInfo.uptime, isLast: true),
-                  ],
+                child: Text(
+                  _cpuStaticInfo!.modelName,
+                  textAlign: TextAlign.end,
+                  style: titleStyle.copyWith(fontSize: 16, height: 1.8),
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
-              const VerticalDivider(color: Colors.white24, thickness: 1),
-              Expanded(
-                flex: 3,
-                child: Padding(
-                  padding: const EdgeInsets.only(left: 16.0),
-                  child: Column(
+            ],
+          ),
+          const SizedBox(height: 16),
+          GridView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+              maxCrossAxisExtent: 150,
+              mainAxisSpacing: 8,
+              crossAxisSpacing: 8,
+              childAspectRatio: 2,
+            ),
+            itemCount: _cpuStaticInfo!.threads,
+            itemBuilder: (context, index) {
+              return Container(
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.white.withValues(alpha: 0.2)),
+                ),
+                child: CustomPaint(
+                  painter: SparklinePainter(
+                    data: _perCpuHistory.length > index ? _perCpuHistory[index] : [],
+                    color: const Color(0xFF1B66B1),
+                  ),
+                ),
+              );
+            },
+          ),
+          const SizedBox(height: 24),
+          Scrollbar(
+            controller: _horizontalScrollController,
+            child: SingleChildScrollView(
+              controller: _horizontalScrollController,
+              scrollDirection: Axis.horizontal,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(minWidth: 550),
+                child: IntrinsicHeight(
+                  child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _buildHardwareInfoItem('基准速度:', _cpuStaticInfo!.baseSpeed),
-                      _buildHardwareInfoItem('插槽:', _cpuStaticInfo!.sockets.toString()),
-                      _buildHardwareInfoItem('内核:', _cpuStaticInfo!.cores.toString()),
-                      _buildHardwareInfoItem('逻辑处理器:', _cpuStaticInfo!.threads.toString()),
-                      _buildHardwareInfoItem('虚拟化:', _cpuStaticInfo!.virtualization),
-                      _buildHardwareInfoItem('L1 缓存:', '${_cpuStaticInfo!.l1dCache} (D) / ${_cpuStaticInfo!.l1iCache} (I)'),
-                      _buildHardwareInfoItem('L2 缓存:', _cpuStaticInfo!.l2Cache),
-                      _buildHardwareInfoItem('L3 缓存:', _cpuStaticInfo!.l3Cache),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              _buildStatItem('利用率', '${_cpuDynamicInfo.utilization.toStringAsFixed(0)} %'),
+                              const SizedBox(width: 16),
+                              _buildStatItem('速度', '${_cpuDynamicInfo.currentSpeed.toStringAsFixed(2)} GHz'),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          Row(
+                            children: [
+                              _buildStatItem('进程', _cpuDynamicInfo.processes.toString()),
+                              const SizedBox(width: 16),
+                              _buildStatItem('线程', _cpuDynamicInfo.threads.toString()),
+                              const SizedBox(width: 16),
+                              _buildStatItem('句柄', _cpuDynamicInfo.handles.toString()),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          _buildStatItem('正常运行时间', _cpuDynamicInfo.uptime, isLast: true),
+                        ],
+                      ),
+                      const VerticalDivider(color: Colors.white24, thickness: 1),
+                      Padding(
+                        padding: const EdgeInsets.only(left: 16.0),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _buildHardwareInfoItem('基准速度: ', _cpuStaticInfo!.baseSpeed),
+                            _buildHardwareInfoItem('插槽: ', _cpuStaticInfo!.sockets.toString()),
+                            _buildHardwareInfoItem('内核: ', _cpuStaticInfo!.cores.toString()),
+                            _buildHardwareInfoItem('逻辑处理器: ', _cpuStaticInfo!.threads.toString()),
+                            _buildHardwareInfoItem('虚拟化: ', _cpuStaticInfo!.virtualization),
+                            _buildHardwareInfoItem('L1 缓存: ', '${_cpuStaticInfo!.l1dCache} (D) / ${_cpuStaticInfo!.l1iCache} (I)'),
+                            _buildHardwareInfoItem('L2 缓存: ', _cpuStaticInfo!.l2Cache),
+                            _buildHardwareInfoItem('L3 缓存: ', _cpuStaticInfo!.l3Cache),
+                          ],
+                        ),
+                      )
                     ],
                   ),
                 ),
-              )
-            ],
+              ),
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
@@ -1031,24 +1043,32 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        return SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: SizedBox(
-            width: totalWidth,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _buildTableHeader(),
-                Expanded(
-                  child: ListView.builder(
-                    itemCount: _processes.length,
-                    itemExtent: _rowHeight,
-                    itemBuilder: (context, index) {
-                      return _buildTableRow(_processes[index]);
-                    },
+        return Scrollbar(
+          controller: _horizontalScrollController,
+          child: SingleChildScrollView(
+            controller: _horizontalScrollController,
+            scrollDirection: Axis.horizontal,
+            child: SizedBox(
+              width: totalWidth,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _buildTableHeader(),
+                  Expanded(
+                    child: Scrollbar(
+                      controller: _verticalScrollController,
+                      child: ListView.builder(
+                        controller: _verticalScrollController,
+                        itemCount: _processes.length,
+                        itemExtent: _rowHeight,
+                        itemBuilder: (context, index) {
+                          return _buildTableRow(_processes[index]);
+                        },
+                      ),
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         );

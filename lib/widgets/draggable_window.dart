@@ -3,8 +3,8 @@ import 'package:flutter/material.dart';
 
 const double _kTitleBarHeight = 24.0;
 const double _kResizeHandleSize = 8.0;
-const double _kMinWindowWidth = 200.0;
-const double _kMinWindowHeight = 150.0;
+const double _kMinWindowWidth = 600.0;
+const double _kMinWindowHeight = 400.0;
 
 class DraggableWindow extends StatefulWidget {
   final String id;

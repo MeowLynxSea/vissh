@@ -147,7 +147,9 @@ class _LoginPageState extends State<LoginPage> {
                 ),
                 const SizedBox(height: 20),
                 _isLoading
-                    ? const CircularProgressIndicator()
+                    ? const CircularProgressIndicator(
+                      color: Colors.white,
+                    )
                     : ElevatedButton.icon(
                         onPressed: _login,
                         icon: const Icon(Icons.login),
