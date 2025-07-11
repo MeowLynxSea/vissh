@@ -81,3 +81,110 @@ class CpuDynamicInfo {
     );
   }
 }
+
+class MemoryInfo {
+  final int total;
+  final int free;
+  final int available;
+  final int buffers;
+  final int cached;
+  final int swapTotal;
+  final int swapFree;
+  final int active;
+  final int inactive;
+  final int pagedPool;
+  final int nonPagedPool;
+  final int hardwareReserved;
+  final double usedPercentage;
+  final List<double> usageHistory;
+  final MemoryHardwareInfo hardwareInfo;
+
+  MemoryInfo({
+    required this.total,
+    required this.free,
+    required this.available,
+    required this.buffers,
+    required this.cached,
+    required this.swapTotal,
+    required this.swapFree,
+    required this.active,
+    required this.inactive,
+    required this.pagedPool,
+    required this.nonPagedPool,
+    required this.hardwareReserved,
+    required this.usedPercentage,
+    required this.usageHistory,
+    required this.hardwareInfo,
+  });
+
+  factory MemoryInfo.initial() {
+    return MemoryInfo(
+      total: 0,
+      free: 0,
+      available: 0,
+      buffers: 0,
+      cached: 0,
+      swapTotal: 0,
+      swapFree: 0,
+      active: 0,
+      inactive: 0,
+      pagedPool: 0,
+      nonPagedPool: 0,
+      hardwareReserved: 0,
+      usedPercentage: 0.0,
+      usageHistory: List.generate(60, (_) => 0.0),
+      hardwareInfo: MemoryHardwareInfo(speed: '未知', slotsUsed: '未知', formFactor: '未知'),
+    );
+  }
+
+  int get used => total - available;
+  int get swapUsed => swapTotal - swapFree;
+  
+  MemoryInfo copyWith({
+    int? total,
+    int? free,
+    int? available,
+    int? buffers,
+    int? cached,
+    int? swapTotal,
+    int? swapFree,
+    int? active,
+    int? inactive,
+    int? pagedPool,
+    int? nonPagedPool,
+    int? hardwareReserved,
+    double? usedPercentage,
+    List<double>? usageHistory,
+    MemoryHardwareInfo? hardwareInfo,
+  }) {
+    return MemoryInfo(
+      total: total ?? this.total,
+      free: free ?? this.free,
+      available: available ?? this.available,
+      buffers: buffers ?? this.buffers,
+      cached: cached ?? this.cached,
+      swapTotal: swapTotal ?? this.swapTotal,
+      swapFree: swapFree ?? this.swapFree,
+      active: active ?? this.active,
+      inactive: inactive ?? this.inactive,
+      pagedPool: pagedPool ?? this.pagedPool,
+      nonPagedPool: nonPagedPool ?? this.nonPagedPool,
+      hardwareReserved: hardwareReserved ?? this.hardwareReserved,
+      usedPercentage: usedPercentage ?? this.usedPercentage,
+      usageHistory: usageHistory ?? this.usageHistory,
+      hardwareInfo: hardwareInfo ?? this.hardwareInfo,
+    );
+  }
+}
+
+class MemoryHardwareInfo {
+  final String speed;
+  final String slotsUsed;
+  final String formFactor;
+
+  MemoryHardwareInfo({
+    required this.speed,
+    required this.slotsUsed,
+    required this.formFactor,
+  });
+}

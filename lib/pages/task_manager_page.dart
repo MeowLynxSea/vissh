@@ -26,6 +26,8 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
   double _totalMemUsage = 0.0;
   double _totalDiskPercentage = 0.0;
 
+  MemoryInfo _memoryInfo = MemoryInfo.initial();
+
   CpuStaticInfo? _cpuStaticInfo;
   CpuDynamicInfo _cpuDynamicInfo = CpuDynamicInfo.initial();
   List<List<double>> _perCpuHistory = [];
@@ -33,6 +35,7 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
   List<List<int>>? _lastPerCpuTimes;
 
   int? _totalMemoryKB;
+  MemoryHardwareInfo _memoryHardwareInfo = MemoryInfo.initial().hardwareInfo;
   
   int _selectedPerformanceMetricIndex = 0;
   final Map<String, List<double>> _metricHistory = {
@@ -64,6 +67,8 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
 
   final ScrollController _horizontalScrollController = ScrollController();
   final ScrollController _verticalScrollController = ScrollController();
+  final ScrollController _horizontalMemoryScrollController = ScrollController();
+
 
   @override
   void initState() {
@@ -73,6 +78,9 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
       if (mounted) {
         _fetchProcessInfo();
         _fetchCpuPerformanceInfo();
+        if (_selectedIndex == 1) {
+          _fetchMemoryDetails();
+        }
       }
     });
   }
@@ -83,6 +91,7 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
     _client?.close();
     _horizontalScrollController.dispose();
     _verticalScrollController.dispose();
+    _horizontalMemoryScrollController.dispose();
     super.dispose();
   }
 
@@ -94,15 +103,126 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
         username: widget.credentials.username,
         onPasswordRequest: () => widget.credentials.password,
       );
-      await _fetchCpuStaticInfo(); 
+      await Future.wait([
+        _fetchCpuStaticInfo(),
+        _getTotalMemory(),
+        _fetchMemoryDetails(),
+        _fetchMemoryHardwareInfo(),
+      ]);
       await _fetchCpuPerformanceInfo();
-      await _getTotalMemory();
       await _fetchProcessInfo();
     } catch (e) {
       if (mounted) {
         setState(() {
           _errorMessage = '无法连接到服务器: $e';
           _isLoading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _fetchMemoryDetails() async {
+    if (_client == null) return;
+    try {
+      final result = await _client!.run('cat /proc/meminfo');
+      final meminfo = utf8.decode(result);
+      final lines = meminfo.split('\n');
+      final memMap = <String, int>{};
+      for (var line in lines) {
+        final parts = line.split(RegExp(r':\s*'));
+        if (parts.length == 2) {
+          final value = int.tryParse(parts[1].replaceAll(RegExp(r'\s*kB'), '').trim());
+          if (value != null) {
+            memMap[parts[0]] = value;
+          }
+        }
+      }
+
+      final total = memMap['MemTotal'] ?? 0;
+      final free = memMap['MemFree'] ?? 0;
+      final available = memMap['MemAvailable'] ?? 0;
+      final used = total - available;
+      final usedPercentage = total > 0 ? (used / total) * 100 : 0.0;
+
+      final history = List<double>.from(_memoryInfo.usageHistory);
+      history.add(usedPercentage);
+      if (history.length > 60) {
+        history.removeAt(0);
+      }
+
+      if (mounted) {
+        setState(() {
+          _memoryInfo = MemoryInfo(
+            total: total,
+            free: free,
+            available: available,
+            buffers: memMap['Buffers'] ?? 0,
+            cached: memMap['Cached'] ?? 0,
+            swapTotal: memMap['SwapTotal'] ?? 0,
+            swapFree: memMap['SwapFree'] ?? 0,
+            active: memMap['Active'] ?? 0,
+            inactive: memMap['Inactive'] ?? 0,
+            pagedPool: memMap['SReclaimable'] ?? 0, // 使用 SReclaimable 作为 Paged Pool
+            nonPagedPool: memMap['SUnreclaim'] ?? 0, // 使用 SUnreclaim 作为 Non-paged Pool
+            hardwareReserved: memMap['HardwareCorrupted'] ?? 0, // 使用 HardwareCorrupted 作为硬件保留
+            usedPercentage: usedPercentage,
+            usageHistory: history,
+            hardwareInfo: _memoryInfo.hardwareInfo, // 保持已获取的硬件信息
+          );
+        });
+      }
+    } catch (e) { /* ... */ }
+  }
+
+  /// 新增方法：获取内存硬件信息
+  Future<void> _fetchMemoryHardwareInfo() async {
+    if (_client == null) return;
+    try {
+      // 尝试使用 dmidecode 获取内存信息，可能需要 root 权限
+      final result = await _client!.run('sudo dmidecode -t memory');
+      final output = utf8.decode(result);
+
+      String speed = '未知';
+      String slots = '未知';
+      String formFactor = '未知';
+
+      final speedMatch = RegExp(r'Speed:\s*(\d+\s*MT/s)').firstMatch(output);
+      if (speedMatch != null) {
+        speed = speedMatch.group(1)!;
+      }
+
+      final locatorMatches = output.contains('Locator:');
+      if (locatorMatches) {
+        final totalSlots = 'Number Of Devices: (\\d+)'.allMatches(output).last;
+        final populatedSlots = 'Locator:.*Bank'.allMatches(output).length;
+        if (populatedSlots > 0 && totalSlots.group(1) != null) {
+           slots = '$populatedSlots/${totalSlots.group(1)}';
+        } else if (populatedSlots > 0) {
+           slots = '$populatedSlots/$populatedSlots';
+        }
+      }
+      
+      final formFactorMatch = RegExp(r'Form Factor:\s*(\w+)').firstMatch(output);
+      if (formFactorMatch != null) {
+        formFactor = formFactorMatch.group(1)!;
+      }
+
+      if (mounted) {
+        setState(() {
+          _memoryHardwareInfo = MemoryHardwareInfo(
+            speed: speed,
+            slotsUsed: slots,
+            formFactor: formFactor,
+          );
+          // 更新 memoryInfo 对象
+          _memoryInfo = _memoryInfo.copyWith(hardwareInfo: _memoryHardwareInfo);
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _memoryHardwareInfo = MemoryHardwareInfo(speed: '未知', slotsUsed: '未知', formFactor: '未知');
+          _memoryInfo = _memoryInfo.copyWith(hardwareInfo: _memoryHardwareInfo);
         });
       }
     }
@@ -265,9 +385,7 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
           );
         });
       }
-    } catch (e) {
-      print('获取CPU动态信息失败: $e');
-    }
+    } catch (e) { /* ... */ }
   }
 
   double _calculateCpuUsage(List<int> current, List<int> previous) {
@@ -773,8 +891,206 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
   Widget _buildPerformanceDetails() {
     return switch (_selectedPerformanceMetricIndex) {
       0 => _buildCpuDetailsPage(),
+      1 => _buildMemoryDetailsPage(),
       _ => _buildPlaceholderDetailsPage(),
     };
+  }
+
+  Widget _buildDetailStat(String value, String label, {String? subValue}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.baseline,
+          textBaseline: TextBaseline.alphabetic,
+          children: [
+            Text(value, style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w500)),
+            if (subValue != null) ...[
+              const SizedBox(width: 8),
+              Text(subValue, style: TextStyle(color: Colors.grey[400], fontSize: 14)),
+            ]
+          ],
+        ),
+        const SizedBox(height: 2),
+        Text(label, style: TextStyle(color: Colors.grey[400], fontSize: 12)),
+      ],
+    );
+  }
+
+  Widget _buildHardwareStat(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4.0),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: TextStyle(color: Colors.grey[400], fontSize: 12)),
+          Text(value, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w500)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMemoryDetailsPage() {
+    final titleStyle = const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.w300);
+    
+    final totalGB = _memoryInfo.total / (1024 * 1024);
+    final usedGB = (_memoryInfo.total - _memoryInfo.available) / (1024 * 1024);
+    final availableGB = _memoryInfo.available / (1024 * 1024);
+    final cachedGB = _memoryInfo.cached / (1024 * 1024);
+    
+    final committedGB = (_memoryInfo.total - _memoryInfo.available + _memoryInfo.swapUsed) / (1024 * 1024);
+    final totalCommittedGB = (_memoryInfo.total + _memoryInfo.swapTotal) / (1024 * 1024);
+
+    final pagedPoolMB = _memoryInfo.pagedPool / 1024;
+    final nonPagedPoolMB = _memoryInfo.nonPagedPool / 1024;
+    final hardwareReservedMB = _memoryInfo.hardwareReserved / 1024;
+
+    final usedPercentage = totalGB > 0 ? (usedGB / totalGB) : 0.0;
+    
+    return Scrollbar(
+      controller: _verticalScrollController,
+      thumbVisibility: true,
+      child: ListView(
+        controller: _verticalScrollController,
+        padding: const EdgeInsets.all(24),
+        children: [
+          // Top Header
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text('内存', style: titleStyle),
+              const Spacer(),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text('${totalGB.toStringAsFixed(1)} GB', style: titleStyle.copyWith(fontSize: 20)),
+                ],
+              )
+            ],
+          ),
+          const SizedBox(height: 16),
+  
+          SizedBox(
+            height: 120,
+            child: Container(
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.white.withValues(alpha: 0.2)),
+              ),
+              child: CustomPaint(
+                painter: SparklinePainter(
+                  data: _memoryInfo.usageHistory,
+                  color: const Color(0xFF8635A8),
+                  fillColor: const Color(0xFF283C55),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 24),
+  
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('内存组合', style: TextStyle(color: Colors.grey[400], fontSize: 12)),
+              const SizedBox(height: 4),
+              Container(
+                height: 20,
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.black.withValues(alpha: 0.5)),
+                  color: Colors.transparent,
+                ),
+                child: ClipRRect(
+                  child: Row(
+                    children: [
+                      Expanded(
+                        flex: (usedPercentage * 1000).toInt(),
+                        child: Container(color: const Color(0xFF283C55)), // 使用中
+                      ),
+                      // 可以添加其他内存类型的可视化, e.g., cached
+                      Expanded(
+                        flex: ((cachedGB / totalGB) * 1000).toInt(),
+                        child: Container(color: Colors.teal.withValues(alpha: 0.5)), // 缓存
+                      ),
+                      Expanded(
+                        flex: ((1 - usedPercentage - (cachedGB / totalGB)) * 1000).toInt(),
+                        child: Container(color: Colors.transparent), // 可用
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 24),
+  
+          // Stats Grid - Scrollable
+          Scrollbar(
+            controller: _horizontalMemoryScrollController,
+            thumbVisibility: true,
+            child: SingleChildScrollView(
+              controller: _horizontalMemoryScrollController,
+              scrollDirection: Axis.horizontal,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(minWidth: 550),
+                child: IntrinsicHeight(
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Left Column
+                      SizedBox(
+                        width: 180,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _buildDetailStat('${usedGB.toStringAsFixed(1)} GB', '使用中'),
+                            const SizedBox(height: 20),
+                            _buildDetailStat('${committedGB.toStringAsFixed(1)}/${totalCommittedGB.toStringAsFixed(1)} GB', '已提交'),
+                            const SizedBox(height: 20),
+                             _buildDetailStat('${pagedPoolMB.toStringAsFixed(1)} MB', '分页缓冲池'),
+                          ],
+                        ),
+                      ),
+                      const VerticalDivider(color: Colors.white24, thickness: 1, indent: 10, endIndent: 10),
+                      // Middle Column
+                      Container(
+                        width: 180,
+                        padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _buildDetailStat('${availableGB.toStringAsFixed(1)} GB', '可用'),
+                            const SizedBox(height: 20),
+                            _buildDetailStat('${cachedGB.toStringAsFixed(1)} GB', '已缓存'),
+                             const SizedBox(height: 20),
+                            _buildDetailStat('${nonPagedPoolMB.toStringAsFixed(1)} MB', '非分页缓冲池'),
+                          ],
+                        ),
+                      ),
+                      const VerticalDivider(color: Colors.white24, thickness: 1, indent: 10, endIndent: 10),
+                      // Right Column (Hardware)
+                      SizedBox(
+                        width: 180,
+                        child: Padding(
+                          padding: const EdgeInsets.only(left: 16.0),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _buildHardwareStat('速度:', _memoryHardwareInfo.speed),
+                              _buildHardwareStat('已使用的插槽:', _memoryHardwareInfo.slotsUsed),
+                              _buildHardwareStat('外形规格:', _memoryHardwareInfo.formFactor),
+                              _buildHardwareStat('为硬件保留的内存:', '${hardwareReservedMB.toStringAsFixed(1)} MB'),
+                            ],
+                          ),
+                        ),
+                      )
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildPageContent() {
@@ -810,31 +1126,36 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
 
     return Scrollbar(
       controller: _verticalScrollController,
+      thumbVisibility: true,
       child: ListView(
         controller: _verticalScrollController,
         padding: const EdgeInsets.all(24),
         children: [
+          // Top Header
           Row(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               Text('CPU', style: titleStyle),
-              const SizedBox(width: 16),
+              const Spacer(),
               Expanded(
                 child: Text(
                   _cpuStaticInfo!.modelName,
                   textAlign: TextAlign.end,
-                  style: titleStyle.copyWith(fontSize: 16, height: 1.8),
+                  style: titleStyle.copyWith(fontSize: 16),
                   overflow: TextOverflow.ellipsis,
+                  maxLines: 2,
                 ),
               ),
             ],
           ),
           const SizedBox(height: 16),
+
+          // Per-core graphs
           GridView.builder(
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
             gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-              maxCrossAxisExtent: 150,
+              maxCrossAxisExtent: 200,
               mainAxisSpacing: 8,
               crossAxisSpacing: 8,
               childAspectRatio: 2,
@@ -849,62 +1170,77 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
                   painter: SparklinePainter(
                     data: _perCpuHistory.length > index ? _perCpuHistory[index] : [],
                     color: const Color(0xFF1B66B1),
+                    fillColor: const Color(0xFF283C55),
                   ),
                 ),
               );
             },
           ),
           const SizedBox(height: 24),
+
+          // Stats Grid - Scrollable
           Scrollbar(
             controller: _horizontalScrollController,
+            thumbVisibility: true,
             child: SingleChildScrollView(
               controller: _horizontalScrollController,
               scrollDirection: Axis.horizontal,
               child: ConstrainedBox(
-                constraints: const BoxConstraints(minWidth: 550),
+                constraints: const BoxConstraints(minWidth: 550), // 保证最小宽度
                 child: IntrinsicHeight(
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              _buildStatItem('利用率', '${_cpuDynamicInfo.utilization.toStringAsFixed(0)} %'),
-                              const SizedBox(width: 16),
-                              _buildStatItem('速度', '${_cpuDynamicInfo.currentSpeed.toStringAsFixed(2)} GHz'),
-                            ],
-                          ),
-                          const SizedBox(height: 12),
-                          Row(
-                            children: [
-                              _buildStatItem('进程', _cpuDynamicInfo.processes.toString()),
-                              const SizedBox(width: 16),
-                              _buildStatItem('线程', _cpuDynamicInfo.threads.toString()),
-                              const SizedBox(width: 16),
-                              _buildStatItem('句柄', _cpuDynamicInfo.handles.toString()),
-                            ],
-                          ),
-                          const SizedBox(height: 12),
-                          _buildStatItem('正常运行时间', _cpuDynamicInfo.uptime, isLast: true),
-                        ],
-                      ),
-                      const VerticalDivider(color: Colors.white24, thickness: 1),
-                      Padding(
-                        padding: const EdgeInsets.only(left: 16.0),
+                      // Left Column
+                      SizedBox(
+                        width: 180,
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            _buildHardwareInfoItem('基准速度: ', _cpuStaticInfo!.baseSpeed),
-                            _buildHardwareInfoItem('插槽: ', _cpuStaticInfo!.sockets.toString()),
-                            _buildHardwareInfoItem('内核: ', _cpuStaticInfo!.cores.toString()),
-                            _buildHardwareInfoItem('逻辑处理器: ', _cpuStaticInfo!.threads.toString()),
-                            _buildHardwareInfoItem('虚拟化: ', _cpuStaticInfo!.virtualization),
-                            _buildHardwareInfoItem('L1 缓存: ', '${_cpuStaticInfo!.l1dCache} (D) / ${_cpuStaticInfo!.l1iCache} (I)'),
-                            _buildHardwareInfoItem('L2 缓存: ', _cpuStaticInfo!.l2Cache),
-                            _buildHardwareInfoItem('L3 缓存: ', _cpuStaticInfo!.l3Cache),
+                            _buildDetailStat('${_cpuDynamicInfo.utilization.toStringAsFixed(0)} %', '利用率'),
+                            const SizedBox(height: 20),
+                            _buildDetailStat(_cpuDynamicInfo.processes.toString(), '进程'),
+                            const SizedBox(height: 20),
+                            _buildDetailStat(_cpuDynamicInfo.handles.toString(), '句柄'),
                           ],
+                        ),
+                      ),
+                      const VerticalDivider(color: Colors.white24, thickness: 1, indent: 10, endIndent: 10),
+                      // Middle Column
+                      Container(
+                         width: 180,
+                         padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                         child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _buildDetailStat('${_cpuDynamicInfo.currentSpeed.toStringAsFixed(2)} GHz', '速度'),
+                              const SizedBox(height: 20),
+                              _buildDetailStat(_cpuDynamicInfo.threads.toString(), '线程'),
+                              const SizedBox(height: 20),
+                              _buildDetailStat(_cpuDynamicInfo.uptime, '正常运行时间', subValue: ''),
+                            ],
+                         ),
+                      ),
+                      const VerticalDivider(color: Colors.white24, thickness: 1, indent: 10, endIndent: 10),
+                      // Right Column (Hardware)
+                      SizedBox(
+                        width: 240,
+                        child: Padding(
+                          padding: const EdgeInsets.only(left: 16.0),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _buildHardwareStat('基准速度:', _cpuStaticInfo!.baseSpeed),
+                              _buildHardwareStat('插槽:', _cpuStaticInfo!.sockets.toString()),
+                              _buildHardwareStat('内核:', _cpuStaticInfo!.cores.toString()),
+                              _buildHardwareStat('逻辑处理器:', _cpuStaticInfo!.threads.toString()),
+                              _buildHardwareStat('虚拟化:', _cpuStaticInfo!.virtualization),
+                              _buildHardwareStat('L1 缓存:', '${_cpuStaticInfo!.l1dCache} (D)'),
+                              _buildHardwareStat('', '${_cpuStaticInfo!.l1iCache} (I)'),
+                              _buildHardwareStat('L2 缓存:', _cpuStaticInfo!.l2Cache),
+                              _buildHardwareStat('L3 缓存:', _cpuStaticInfo!.l3Cache),
+                            ],
+                          ),
                         ),
                       )
                     ],
@@ -913,32 +1249,6 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
               ),
             ),
           ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildStatItem(String label, String value, {bool isLast = false}) {
-    return Padding(
-      padding: EdgeInsets.only(bottom: isLast ? 0 : 4.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(value, style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w500)),
-          Text(label, style: TextStyle(color: Colors.grey[400], fontSize: 12)),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildHardwareInfoItem(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4.0),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(label, style: TextStyle(color: Colors.grey[400], fontSize: 12)),
-          Text(value, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w500)),
         ],
       ),
     );
@@ -1459,21 +1769,24 @@ class _RunTaskDialogState extends State<_RunTaskDialog> {
 class SparklinePainter extends CustomPainter {
   final List<double> data;
   final Color color;
+  final Color? fillColor;
 
-  SparklinePainter({required this.data, required this.color});
+  SparklinePainter({required this.data, required this.color, this.fillColor});
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (data.length < 2) return;
+    if (data.isEmpty) return;
 
     final paint = Paint()
       ..color = color
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.0;
     
+    final finalFillColor = fillColor ?? color.withValues(alpha: 0.3);
+
     final fillPaint = Paint()
       ..shader = LinearGradient(
-        colors: [color.withValues(alpha: 0.3), color.withValues(alpha: 0.05)],
+        colors: [finalFillColor, finalFillColor.withValues(alpha: 0.05)],
         begin: Alignment.topCenter,
         end: Alignment.bottomCenter,
       ).createShader(Rect.fromLTWH(0, 0, size.width, size.height))
@@ -1484,25 +1797,41 @@ class SparklinePainter extends CustomPainter {
     final path = Path();
     final fillPath = Path();
 
-    double stepX = size.width / (data.length - 1);
-
-    for (int i = 0; i < data.length; i++) {
-      double value = data[i].clamp(0.0, maxValue);
-      double x = i * stepX;
+    // If there's only one point, draw a line across.
+    if (data.length == 1) {
+      double value = data[0].clamp(0.0, maxValue);
       double y = size.height - (value / maxValue * size.height);
+      path.moveTo(0, y);
+      path.lineTo(size.width, y);
+      
+      fillPath.moveTo(0, size.height);
+      fillPath.lineTo(0, y);
+      fillPath.lineTo(size.width, y);
+      fillPath.lineTo(size.width, size.height);
+      fillPath.close();
 
-      if (i == 0) {
-        path.moveTo(x, y);
-        fillPath.moveTo(x, size.height);
-        fillPath.lineTo(x, y);
-      } else {
-        path.lineTo(x, y);
-        fillPath.lineTo(x, y);
+    } else {
+      double stepX = size.width / (data.length - 1);
+
+      for (int i = 0; i < data.length; i++) {
+        double value = data[i].clamp(0.0, maxValue);
+        double x = i * stepX;
+        double y = size.height - (value / maxValue * size.height);
+
+        if (i == 0) {
+          path.moveTo(x, y);
+          fillPath.moveTo(x, size.height);
+          fillPath.lineTo(x, y);
+        } else {
+          path.lineTo(x, y);
+          fillPath.lineTo(x, y);
+        }
       }
+
+      fillPath.lineTo(size.width, size.height);
+      fillPath.close();
     }
 
-    fillPath.lineTo(size.width, size.height);
-    fillPath.close();
 
     canvas.drawPath(fillPath, fillPaint);
     canvas.drawPath(path, paint);
@@ -1510,6 +1839,8 @@ class SparklinePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant SparklinePainter oldDelegate) {
-    return oldDelegate.data != data || oldDelegate.color != color;
+    return oldDelegate.data != data || 
+           oldDelegate.color != color || 
+           oldDelegate.fillColor != fillColor;
   }
 }
