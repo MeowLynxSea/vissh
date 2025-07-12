@@ -262,6 +262,10 @@ class _WindowManagerState extends State<WindowManager> {
     }
   }
 
+  void _disconnect() {
+    widget.sshClient.close();
+  }
+
   @override
   Widget build(BuildContext context) {
     if (!_isVerified) {
@@ -401,6 +405,8 @@ class _WindowManagerState extends State<WindowManager> {
               activeWindowId: activeWindowId,
               onWindowIconTap: _onWindowIconTap,
               connectionQuality: _connectionQuality,
+              credentials: widget.credentials,
+              onDisconnect: _disconnect,
             ),
           ],
         ),

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:vissh/models/credentials.dart';
 import '../models/window_data.dart';
 import '../models/app_data.dart';
 
@@ -13,6 +14,8 @@ class Taskbar extends StatefulWidget {
   final String? connectionQuality;
   final List<AppData> apps;
   final Function(String) onAppLaunch;
+  final SSHCredentials? credentials;
+  final VoidCallback? onDisconnect;
 
   const Taskbar({
     super.key,
@@ -23,6 +26,8 @@ class Taskbar extends StatefulWidget {
     this.activeWindowId,
     this.height = 48.0,
     this.connectionQuality,
+    this.credentials,
+    this.onDisconnect,
   });
 
   @override
@@ -176,6 +181,8 @@ class _TaskbarState extends State<Taskbar> {
             child: _StartMenuContent(
               apps: widget.apps,
               onAppLaunch: widget.onAppLaunch,
+              credentials: widget.credentials,
+              onDisconnect: widget.onDisconnect,
               onClose: () {
                 if (navigator.canPop()) {
                   navigator.pop();
@@ -336,11 +343,15 @@ class _StartMenuContent extends StatefulWidget {
   final List<AppData> apps;
   final Function(String) onAppLaunch;
   final VoidCallback onClose;
+  final SSHCredentials? credentials;
+  final VoidCallback? onDisconnect;
 
   const _StartMenuContent({
     required this.apps,
     required this.onAppLaunch,
     required this.onClose,
+    this.credentials,
+    this.onDisconnect,
   });
 
   @override
@@ -419,7 +430,6 @@ class _StartMenuContentState extends State<_StartMenuContent> {
           filter: ImageFilter.blur(sigmaX: 10.0, sigmaY: 10.0),
           child: Container(
             width: 640,
-            padding: const EdgeInsets.all(16.0),
             decoration: BoxDecoration(
               color: Colors.black.withValues(alpha: 0.5),
               borderRadius: BorderRadius.circular(12.0),
@@ -427,65 +437,111 @@ class _StartMenuContentState extends State<_StartMenuContent> {
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 16.0),
-                  child: TextField(
-                    controller: _searchController,
-                    autofocus: true,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: InputDecoration(
-                      hintText: '搜索应用...',
-                      hintStyle: const TextStyle(color: Colors.white70),
-                      prefixIcon: const Icon(Icons.search, color: Colors.white70),
-                      filled: true,
-                      fillColor: Colors.white.withValues(alpha: 0.1),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8.0),
-                        borderSide: BorderSide.none,
+                Flexible(
+                  child: SingleChildScrollView(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16.0),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 16.0),
+                            child: TextField(
+                              controller: _searchController,
+                              autofocus: true,
+                              style: const TextStyle(color: Colors.white),
+                              decoration: InputDecoration(
+                                hintText: '搜索应用...',
+                                hintStyle: const TextStyle(color: Colors.white70),
+                                prefixIcon: const Icon(Icons.search, color: Colors.white70),
+                                filled: true,
+                                fillColor: Colors.white.withValues(alpha: 0.1),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(8.0),
+                                  borderSide: BorderSide.none,
+                                ),
+                                contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 16),
+                              ),
+                            ),
+                          ),
+                          _searchController.text == '' ? Text(
+                            '所有应用',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ) : Text(
+                            '匹配的应用',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          Wrap(
+                            alignment: WrapAlignment.center,
+                            spacing: 8.0,
+                            runSpacing: 16.0,
+                            children: filteredApps.isEmpty ? [ Text(
+                              '没有匹配的结果',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 14,
+                              ),
+                            ) ] : filteredApps.map((app) {
+                              return _buildStartMenuItem(
+                                icon: app.icon,
+                                title: app.title,
+                                onTap: () {
+                                  widget.onClose();
+                                  widget.onAppLaunch(app.id);
+                                },
+                              );
+                            }).toList(),
+                          ),
+                        ],
                       ),
-                      contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 16),
                     ),
                   ),
                 ),
-                _searchController.text == '' ? Text(
-                  '所有应用',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold,
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.2),
                   ),
-                ) : Text(
-                  '匹配的应用',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold,
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              widget.credentials?.username ?? 'Unknown User',
+                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              '${widget.credentials?.host}:${widget.credentials?.port}',
+                              style: TextStyle(color: Colors.grey[400], fontSize: 12),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () {
+                          widget.onClose();
+                          widget.onDisconnect?.call();
+                        },
+                        tooltip: '断开连接',
+                        icon: const Icon(Icons.power_settings_new, color: Colors.white),
+                      )
+                    ],
                   ),
-                ),
-                const SizedBox(height: 16),
-                Wrap(
-                  alignment: WrapAlignment.center,
-                  spacing: 8.0,
-                  runSpacing: 16.0,
-                  children: filteredApps.isEmpty ? [ Text(
-                    '没有匹配的结果',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 14,
-                    ),
-                  ) ] : filteredApps.map((app) {
-                    return _buildStartMenuItem(
-                      icon: app.icon,
-                      title: app.title,
-                      onTap: () {
-                        widget.onClose();
-                        widget.onAppLaunch(app.id);
-                      },
-                    );
-                  }).toList(),
-                ),
+                )
               ],
             ),
           ),

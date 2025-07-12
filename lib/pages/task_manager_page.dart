@@ -1355,6 +1355,7 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
       builder: (context, constraints) {
         return Scrollbar(
           controller: _horizontalScrollController,
+          thumbVisibility: true,
           child: SingleChildScrollView(
             controller: _horizontalScrollController,
             scrollDirection: Axis.horizontal,
@@ -1367,6 +1368,7 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
                   Expanded(
                     child: Scrollbar(
                       controller: _verticalScrollController,
+                      thumbVisibility: true,
                       child: ListView.builder(
                         controller: _verticalScrollController,
                         itemCount: _processes.length,
