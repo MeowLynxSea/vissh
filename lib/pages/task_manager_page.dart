@@ -174,37 +174,55 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
     } catch (e) { /* ... */ }
   }
 
-  /// 新增方法：获取内存硬件信息
   Future<void> _fetchMemoryHardwareInfo() async {
     if (_client == null) return;
     try {
-      // 尝试使用 dmidecode 获取内存信息，可能需要 root 权限
       final result = await _client!.run('sudo dmidecode -t memory');
       final output = utf8.decode(result);
+      final outputLower = output.toLowerCase();
+
+      if (output.trim().isEmpty ||
+          outputLower.contains('command not found') ||
+          outputLower.contains('no smbios nor dmi entry point found')) {
+        throw Exception('dmidecode failed or no SMBIOS data available');
+      }
 
       String speed = '未知';
       String slots = '未知';
       String formFactor = '未知';
 
-      final speedMatch = RegExp(r'Speed:\s*(\d+\s*MT/s)').firstMatch(output);
+      var speedMatch = RegExp(r'Speed:\s*(\d+\s*MT/s)', caseSensitive: false).firstMatch(output);
+      speedMatch ??= RegExp(r'Configured Memory Speed:\s*(\d+\s*MT/s)', caseSensitive: false).firstMatch(output);
+      speedMatch ??= RegExp(r'Speed:\s*(\d+\s*MHz)', caseSensitive: false).firstMatch(output);
+      speedMatch ??= RegExp(r'Configured Memory Speed:\s*(\d+\s*MHz)', caseSensitive: false).firstMatch(output);
+      
       if (speedMatch != null) {
-        speed = speedMatch.group(1)!;
+        final matchedSpeed = speedMatch.group(1)!;
+        if (!matchedSpeed.toLowerCase().contains('unknown')) {
+           speed = matchedSpeed;
+        }
       }
 
-      final locatorMatches = output.contains('Locator:');
-      if (locatorMatches) {
-        final totalSlots = 'Number Of Devices: (\\d+)'.allMatches(output).last;
-        final populatedSlots = 'Locator:.*Bank'.allMatches(output).length;
-        if (populatedSlots > 0 && totalSlots.group(1) != null) {
-           slots = '$populatedSlots/${totalSlots.group(1)}';
-        } else if (populatedSlots > 0) {
-           slots = '$populatedSlots/$populatedSlots';
+      final populatedSlots = 'Memory Device'.allMatches(output).length;
+
+      if (populatedSlots > 0) {
+        String totalSlotsDevice = '未知';
+        final arrayMatch = RegExp(r'Physical Memory Array.*?Number Of Devices:\s*(\d+)', dotAll: true).firstMatch(output);
+
+        if (arrayMatch != null) {
+            totalSlotsDevice = arrayMatch.group(1)!;
+            slots = '$populatedSlots/$totalSlotsDevice';
+        } else {
+          slots = '$populatedSlots/$populatedSlots';
         }
       }
       
-      final formFactorMatch = RegExp(r'Form Factor:\s*(\w+)').firstMatch(output);
+      final formFactorMatch = RegExp(r'Form Factor:\s*([\w-]+)', caseSensitive: false).firstMatch(output);
       if (formFactorMatch != null) {
-        formFactor = formFactorMatch.group(1)!;
+        final matchedFormFactor = formFactorMatch.group(1)!;
+        if (!matchedFormFactor.toLowerCase().contains('unknown')) {
+          formFactor = matchedFormFactor.toUpperCase();
+        }
       }
 
       if (mounted) {
@@ -214,7 +232,6 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
             slotsUsed: slots,
             formFactor: formFactor,
           );
-          // 更新 memoryInfo 对象
           _memoryInfo = _memoryInfo.copyWith(hardwareInfo: _memoryHardwareInfo);
         });
       }
