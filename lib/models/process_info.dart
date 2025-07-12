@@ -188,3 +188,113 @@ class MemoryHardwareInfo {
     required this.formFactor,
   });
 }
+
+class DiskInfo {
+  final String id;
+  final String deviceName;
+  final DiskStaticInfo staticInfo;
+  final DiskDynamicInfo dynamicInfo;
+
+  DiskInfo({
+    required this.id,
+    required this.deviceName,
+    required this.staticInfo,
+    required this.dynamicInfo,
+  });
+
+  factory DiskInfo.initial(String deviceName, String model, {required String id}) {
+    return DiskInfo(
+      id: id,
+      deviceName: deviceName,
+      staticInfo: DiskStaticInfo(
+          model: model,
+          type: '未知',
+          capacity: '0 GB',
+          formatted: '0 GB',
+          isSystemDisk: false,
+          hasPageFile: false),
+      dynamicInfo: DiskDynamicInfo.initial(),
+    );
+  }
+}
+
+class DiskStaticInfo {
+  final String model;
+  final String type;
+  final String capacity;
+  final String formatted;
+  final bool isSystemDisk;
+  final bool hasPageFile;
+
+  DiskStaticInfo({
+    required this.model,
+    required this.type,
+    required this.capacity,
+    required this.formatted,
+    required this.isSystemDisk,
+    required this.hasPageFile,
+  });
+
+  factory DiskStaticInfo.initial(String model) {
+    return DiskStaticInfo(
+      model: model,
+      type: '未知',
+      capacity: '未知',
+      formatted: '未知',
+      isSystemDisk: false,
+      hasPageFile: false,
+    );
+  }
+}
+
+class DiskDynamicInfo {
+  final double activeTimePercentage;
+  final double avgResponseTime;
+  final double readSpeed;
+  final double writeSpeed;
+  final double totalTransferSpeed;
+  final List<double> activeTimeHistory;
+  final List<double> transferRateHistory;
+
+  DiskDynamicInfo({
+    required this.activeTimePercentage,
+    required this.avgResponseTime,
+    required this.readSpeed,
+    required this.writeSpeed,
+    required this.totalTransferSpeed,
+    required this.activeTimeHistory,
+    required this.transferRateHistory,
+  });
+
+  factory DiskDynamicInfo.initial() {
+    return DiskDynamicInfo(
+      activeTimePercentage: 0.0,
+      avgResponseTime: 0.0,
+      readSpeed: 0.0,
+      writeSpeed: 0.0,
+      totalTransferSpeed: 0.0,
+      activeTimeHistory: List.generate(60, (_) => 0.0),
+      transferRateHistory: List.generate(60, (_) => 0.0),
+    );
+  }
+
+  DiskDynamicInfo copyWith({
+    double? activeTimePercentage,
+    double? avgResponseTime,
+    double? readSpeed,
+    double? writeSpeed,
+    double? totalTransferSpeed,
+    List<double>? activeTimeHistory,
+    List<double>? transferRateHistory,
+  }) {
+    return DiskDynamicInfo(
+      activeTimePercentage: activeTimePercentage ?? this.activeTimePercentage,
+      avgResponseTime: avgResponseTime ?? this.avgResponseTime,
+      readSpeed: readSpeed ?? this.readSpeed,
+      writeSpeed: writeSpeed ?? this.writeSpeed,
+      totalTransferSpeed: totalTransferSpeed ?? this.totalTransferSpeed,
+      activeTimeHistory: activeTimeHistory ?? this.activeTimeHistory,
+      transferRateHistory: transferRateHistory ?? this.transferRateHistory,
+    );
+  }
+}

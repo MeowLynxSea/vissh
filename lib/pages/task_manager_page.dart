@@ -56,6 +56,10 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
   String? _selectedPid;
   bool _isRunTaskDialogVisible = false;
 
+  List<DiskInfo> _disks = [];
+  Map<String, String> _previousDiskStats = {};
+  DateTime? _lastDiskFetchTime;
+
   final List<double> _columnWidths = [250.0, 90.0, 90.0, 90.0, 90.0, 50.0];
   final List<double> _minColumnWidths = [150.0, 90.0, 90.0, 90.0, 90.0, 20.0];
   final List<String> _columnTitles = ['名称', 'PID', 'CPU', '内存', '磁盘', ''];
@@ -68,6 +72,7 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
   final ScrollController _horizontalScrollController = ScrollController();
   final ScrollController _verticalScrollController = ScrollController();
   final ScrollController _horizontalMemoryScrollController = ScrollController();
+  final ScrollController _horizontalDiskScrollController = ScrollController();
 
 
   @override
@@ -80,6 +85,7 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
         _fetchCpuPerformanceInfo();
         if (_selectedIndex == 1) {
           _fetchMemoryDetails();
+          _fetchDiskInfo();
         }
       }
     });
@@ -108,6 +114,7 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
         _getTotalMemory(),
         _fetchMemoryDetails(),
         _fetchMemoryHardwareInfo(),
+        _fetchDiskInfo(),
       ]);
       await _fetchCpuPerformanceInfo();
       await _fetchProcessInfo();
@@ -119,6 +126,176 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
         });
       }
     }
+  }
+
+  Future<void> _fetchDiskInfo() async {
+    if (_client == null) return;
+
+    // 这个脚本现在是完全可靠的
+    const command = r'''
+    set -e
+    export LC_ALL=C
+    
+    ROOT_DEV=$(df / | awk 'NR==2 {print $1}')
+    SWAP_DEVS=$(swapon -s | awk 'NR>1 {print $1}')
+
+    lsblk -b -p -o NAME,TYPE,SIZE,MODEL,MOUNTPOINT | grep 'disk' | while read -r line; do
+      DEVICE_PATH=$(echo "$line" | awk '{print $1}')
+      DEVICE_NAME=$(basename "$DEVICE_PATH")
+      
+      SIZE_BYTES=$(echo "$line" | awk '{print $3}')
+      MODEL=$(echo "$line" | awk '{ for(i=4; i<NF; i++) printf "%s ", $i }' | xargs)
+      MOUNTS=$(lsblk -n -o MOUNTPOINT "$DEVICE_PATH" | sed '/^$/d' | tr '\n' ' ' | xargs)
+
+      if [ -f "/sys/block/$DEVICE_NAME/queue/rotational" ]; then
+        IS_ROTATIONAL=$(cat "/sys/block/$DEVICE_NAME/queue/rotational")
+        [ "$IS_ROTATIONAL" = "0" ] && TYPE="SSD" || TYPE="HDD"
+      else
+        TYPE="未知"
+      fi
+
+      IS_SYSTEM_DISK="否"
+      echo "$ROOT_DEV" | grep -q "$DEVICE_NAME" && IS_SYSTEM_DISK="是"
+      
+      HAS_PAGE_FILE="否"
+      for SWAP_DEV in $SWAP_DEVS; do
+        echo "$SWAP_DEV" | grep -q "$DEVICE_NAME" && HAS_PAGE_FILE="是" && break
+      done
+
+      if [ -f "/proc/diskstats" ]; then
+        DISK_STATS=$(grep -w "$DEVICE_NAME" /proc/diskstats)
+      else
+        DISK_STATS=""
+      fi
+
+      echo "START_DISK"
+      echo "DEVICE_NAME:$DEVICE_NAME" # <--- 我们将使用这个 'sda', 'sdb' 等作为稳定ID
+      echo "DEVICE_PATH:$DEVICE_PATH"
+      echo "MOUNTS:$MOUNTS"
+      echo "MODEL:$MODEL"
+      echo "SIZE_BYTES:$SIZE_BYTES"
+      echo "TYPE:$TYPE"
+      echo "IS_SYSTEM_DISK:$IS_SYSTEM_DISK"
+      echo "HAS_PAGE_FILE:$HAS_PAGE_FILE"
+      echo "DISK_STATS:$DISK_STATS"
+      echo "END_DISK"
+    done
+    ''';
+
+    try {
+      final result = await _client!.run(command);
+      final output = utf8.decode(result);
+
+      final now = DateTime.now();
+      double intervalSeconds = 1.0;
+      if (_lastDiskFetchTime != null) {
+        intervalSeconds = now.difference(_lastDiskFetchTime!).inMilliseconds / 1000.0;
+        if (intervalSeconds == 0) intervalSeconds = 1.0;
+      }
+
+      final currentDiskStats = <String, String>{};
+      final newDisks = <DiskInfo>[];
+
+      final diskBlocks = output.split("START_DISK").where((b) => b.isNotEmpty);
+
+      for (var block in diskBlocks) {
+        final lines = block.trim().split('\n');
+        final diskData = <String, String>{};
+        for (var line in lines) {
+          final parts = line.split(':');
+          if (parts.length > 1) {
+            diskData[parts[0]] = parts.sublist(1).join(':');
+          }
+        }
+        
+        // --- FIX START: 使用内核设备名 ('sda' 等) 作为稳定ID ---
+        final stableId = diskData['DEVICE_NAME'] ?? DateTime.now().toIso8601String(); // 使用 DEVICE_NAME 作为唯一、稳定的ID
+        final statsLine = diskData['DISK_STATS'] ?? '';
+        currentDiskStats[stableId] = statsLine;
+
+        final mounts = diskData['MOUNTS']?.replaceAll('/ ', ' / ') ?? '';
+        final displayName = '磁盘 ${newDisks.length} ($mounts)';
+
+        final staticInfo = DiskStaticInfo(
+          model: diskData['MODEL'] ?? '未知设备',
+          type: diskData['TYPE'] ?? '未知',
+          capacity: _formatBytes(int.tryParse(diskData['SIZE_BYTES'] ?? '0') ?? 0),
+          formatted: _formatBytes(int.tryParse(diskData['SIZE_BYTES'] ?? '0') ?? 0),
+          isSystemDisk: (diskData['IS_SYSTEM_DISK'] ?? '否') == '是',
+          hasPageFile: (diskData['HAS_PAGE_FILE'] ?? '否') == '是',
+        );
+
+        DiskDynamicInfo dynamicInfo;
+        
+        // 关键修复：使用 stableId 进行查找
+        final existingDisk = _disks.firstWhere(
+          (d) => d.id == stableId,
+          orElse: () => DiskInfo.initial(displayName, staticInfo.model, id: stableId),
+        );
+        
+        final prevStats = _previousDiskStats[stableId];
+        // --- FIX END ---
+        
+        if (statsLine.isNotEmpty && prevStats != null && prevStats.isNotEmpty) {
+          final current = statsLine.trim().split(RegExp(r'\s+'));
+          final previous = prevStats.trim().split(RegExp(r'\s+'));
+
+          final readsCompleted = (int.tryParse(current[3]) ?? 0) - (int.tryParse(previous[3]) ?? 0);
+          final writesCompleted = (int.tryParse(current[7]) ?? 0) - (int.tryParse(previous[7]) ?? 0);
+          final readSectors = (int.tryParse(current[5]) ?? 0) - (int.tryParse(previous[5]) ?? 0);
+          final writeSectors = (int.tryParse(current[9]) ?? 0) - (int.tryParse(previous[9]) ?? 0);
+          final timeSpentIO = (int.tryParse(current[12]) ?? 0) - (int.tryParse(previous[12]) ?? 0);
+
+          final totalIOs = readsCompleted + writesCompleted;
+          final avgResponseTime = (totalIOs > 0) ? (timeSpentIO / totalIOs) : 0.0;
+          
+          final readSpeed = (readSectors * 512) / intervalSeconds;
+          final writeSpeed = (writeSectors * 512) / intervalSeconds;
+          final activeTimePercentage = (timeSpentIO / (intervalSeconds * 1000)) * 100;
+
+          final activeTimeHistory = List<double>.from(existingDisk.dynamicInfo.activeTimeHistory)..add(activeTimePercentage.clamp(0, 100));
+          if (activeTimeHistory.length > 60) activeTimeHistory.removeAt(0);
+
+          final totalTransferSpeed = (readSpeed + writeSpeed) / (1024 * 1024);
+          final transferRateHistory = List<double>.from(existingDisk.dynamicInfo.transferRateHistory)..add(totalTransferSpeed);
+          if (transferRateHistory.length > 60) transferRateHistory.removeAt(0);
+
+          dynamicInfo = existingDisk.dynamicInfo.copyWith(
+            activeTimePercentage: activeTimePercentage,
+            readSpeed: readSpeed / 1024,
+            writeSpeed: writeSpeed / 1024,
+            avgResponseTime: avgResponseTime,
+            activeTimeHistory: activeTimeHistory,
+            transferRateHistory: transferRateHistory,
+            totalTransferSpeed: totalTransferSpeed,
+          );
+
+        } else {
+          dynamicInfo = existingDisk.dynamicInfo;
+        }
+
+        // 关键修复：创建DiskInfo对象时传入stableId
+        newDisks.add(DiskInfo(id: stableId, deviceName: displayName, staticInfo: staticInfo, dynamicInfo: dynamicInfo));
+      }
+
+      if (mounted) {
+        setState(() {
+          _disks = newDisks;
+          _previousDiskStats = currentDiskStats;
+          _lastDiskFetchTime = now;
+        });
+      }
+
+    } catch (e) {
+      // print('获取磁盘信息失败: $e');
+    }
+  }
+
+  String _formatBytes(int bytes, [int decimals = 1]) {
+    if (bytes <= 0) return "0 B";
+    const suffixes = ["B", "KB", "MB", "GB", "TB"];
+    var i = (log(bytes) / log(1024)).floor();
+    return '${(bytes / pow(1024, i)).toStringAsFixed(decimals)} ${suffixes[i]}';
   }
 
   Future<void> _fetchMemoryDetails() async {
@@ -798,7 +975,6 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
   Widget _buildPerformanceSidebar() {
     final cpuUtilization = _totalCpuUsage > 100.0 ? 100.0 : _totalCpuUsage;
     final memoryUtilization = _totalMemUsage;
-    final diskUtilization = _totalDiskPercentage > 100.0 ? 100.0 : _totalDiskPercentage;
 
     final totalMemoryGB = _totalMemoryKB != null ? (_totalMemoryKB! / (1024 * 1024)) : 0.0;
     final usedMemoryGB = totalMemoryGB * (memoryUtilization / 100);
@@ -827,17 +1003,21 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
             historyData: _metricHistory['memory'] ?? [],
             color: const Color(0xFF8635A8),
           ),
-           _buildMetricTile(
-            index: 2,
-            title: '磁盘 0 (E:)',
-            utilization: diskUtilization,
-            detailsLine1: "SSD (NVMe)",
-            detailsLine2: "${diskUtilization.toStringAsFixed(0)}%", 
-            historyData: _metricHistory['disk'] ?? [],
-            color: const Color(0xFF4E731C),
-          ),
-           _buildMetricTile(
-            index: 3,
+          ...List.generate(_disks.length, (diskIndex) {
+            final disk = _disks[diskIndex];
+            final overallIndex = 2 + diskIndex; 
+            return _buildMetricTile(
+              index: overallIndex,
+              title: disk.deviceName,
+              utilization: disk.dynamicInfo.activeTimePercentage,
+              detailsLine1: "${disk.dynamicInfo.totalTransferSpeed.toStringAsFixed(1)} MB/s",
+              detailsLine2: "${disk.dynamicInfo.activeTimePercentage.toStringAsFixed(0)}%",
+              historyData: disk.dynamicInfo.activeTimeHistory,
+              color: const Color(0xFF4E731C),
+            );
+          }),
+          _buildMetricTile(
+            index: 2 + _disks.length,
             title: 'Wi-Fi',
             utilization: 5.0,
             detailsLine1: "WLAN",
@@ -884,7 +1064,7 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
                 border: Border.all(color: color.withValues(alpha: 0.5)),
               ),
               child: CustomPaint(
-                painter: SparklinePainter(data: historyData, color: color),
+                painter: SparklinePainter(data: historyData, color: color, maxValue: 100.0),
               ),
             ),
             const SizedBox(width: 16),
@@ -906,11 +1086,184 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
   }
 
   Widget _buildPerformanceDetails() {
-    return switch (_selectedPerformanceMetricIndex) {
-      0 => _buildCpuDetailsPage(),
-      1 => _buildMemoryDetailsPage(),
-      _ => _buildPlaceholderDetailsPage(),
-    };
+    if (_selectedPerformanceMetricIndex == 0) {
+      return _buildCpuDetailsPage();
+    }
+    if (_selectedPerformanceMetricIndex == 1) {
+      return _buildMemoryDetailsPage();
+    }
+    int diskIndex = _selectedPerformanceMetricIndex - 2;
+    if (diskIndex >= 0 && diskIndex < _disks.length) {
+      return _buildDiskDetailsPage(_disks[diskIndex]);
+      
+    }
+    return _buildPlaceholderDetailsPage();
+  }
+
+  Widget _buildDiskDetailsPage(DiskInfo disk) {
+    final titleStyle = const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.w300);
+
+    // --- FIX START: 为图表动态计算最大值 ---
+    double calculateMaxValue(List<double> data, double fallbackValue) {
+      if (data.isEmpty) {
+        return fallbackValue;
+      }
+      // reduce 在空列表上会引发错误，因此我们先检查是否为空。
+      final maxVal = data.reduce(max);
+      // 如果最大值是0，也使用备用值，以便图表有可见的高度。
+      return maxVal > 0 ? maxVal : fallbackValue;
+    }
+
+    final activeTimeMaxValue = calculateMaxValue(disk.dynamicInfo.activeTimeHistory, 100.0);
+    final transferRateMaxValue = calculateMaxValue(disk.dynamicInfo.transferRateHistory, 0.1);
+    print(disk.dynamicInfo.transferRateHistory);
+    // --- FIX END ---
+
+    return Scrollbar(
+      controller: _verticalScrollController,
+      thumbVisibility: true,
+      child: ListView(
+        controller: _verticalScrollController,
+        padding: const EdgeInsets.all(24),
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(disk.deviceName, style: titleStyle),
+              const Spacer(),
+              Expanded(
+                child: Text(
+                  disk.staticInfo.model,
+                  textAlign: TextAlign.end,
+                  style: titleStyle.copyWith(fontSize: 16),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 2,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 24),
+          
+          // --- FIX START: 在图表构建中使用动态最大值 ---
+          _buildGraphWithLabel(
+            '活动时间',
+            '${activeTimeMaxValue.toStringAsFixed(0)}%',
+            disk.dynamicInfo.activeTimeHistory,
+            const Color(0xFF4E731C),
+            activeTimeMaxValue,
+          ),
+          const SizedBox(height: 16),
+          _buildGraphWithLabel(
+            '磁盘传输速率',
+            '${transferRateMaxValue.toStringAsFixed(1)} MB/s',
+            disk.dynamicInfo.transferRateHistory,
+            const Color(0xFF4E731C),
+            transferRateMaxValue,
+          ),
+          // --- FIX END ---
+          const SizedBox(height: 24),
+
+          Scrollbar(
+            controller: _horizontalDiskScrollController,
+            thumbVisibility: true,
+            child: SingleChildScrollView(
+              controller: _horizontalDiskScrollController,
+              scrollDirection: Axis.horizontal,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(minWidth: 550),
+                child: IntrinsicHeight(
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SizedBox(
+                        width: 180,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _buildDetailStat(
+                                '${disk.dynamicInfo.activeTimePercentage.toStringAsFixed(0)} %', '活动时间'),
+                            const SizedBox(height: 20),
+                            _buildDetailStat(
+                                _formatSpeed(disk.dynamicInfo.readSpeed * 1024),
+                                '读取速度'),
+                          ],
+                        ),
+                      ),
+                      const VerticalDivider(color: Colors.white24, thickness: 1, indent: 10, endIndent: 10),
+                      Container(
+                        width: 180,
+                        padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _buildDetailStat(
+                                '${disk.dynamicInfo.avgResponseTime.toStringAsFixed(1)} 毫秒', '平均响应时间'),
+                            const SizedBox(height: 20),
+                            _buildDetailStat(
+                                _formatSpeed(disk.dynamicInfo.writeSpeed * 1024),
+                                '写入速度'),
+                          ],
+                        ),
+                      ),
+                      const VerticalDivider(color: Colors.white24, thickness: 1, indent: 10, endIndent: 10),
+                      SizedBox(
+                        width: 180,
+                        child: Padding(
+                          padding: const EdgeInsets.only(left: 16.0),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _buildHardwareStat('容量:', disk.staticInfo.capacity),
+                              _buildHardwareStat('已格式化:', disk.staticInfo.formatted),
+                              _buildHardwareStat('系统磁盘:', disk.staticInfo.isSystemDisk ? '是' : '否'),
+                              _buildHardwareStat('页面文件:', disk.staticInfo.hasPageFile ? '是' : '否'),
+                              _buildHardwareStat('类型:', disk.staticInfo.type),
+                            ],
+                          ),
+                        ),
+                      )
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGraphWithLabel(String label, String yAxisMax, List<double> data, Color color, double maxValue) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(label, style: TextStyle(color: Colors.grey[400], fontSize: 12)),
+            Text(yAxisMax, style: TextStyle(color: Colors.grey[400], fontSize: 12)),
+          ],
+        ),
+        const SizedBox(height: 4),
+        SizedBox(
+          height: 80,
+          child: Container(
+            decoration: BoxDecoration(
+              border: Border.all(color: Colors.white.withValues(alpha: 0.2)),
+            ),
+            child: CustomPaint(
+              painter: SparklinePainter(
+                data: data,
+                color: color,
+                fillColor: color.withValues(alpha: 0.8),
+                maxValue: maxValue,
+              ),
+              child: const SizedBox.expand(),
+            ),
+          ),
+        ),
+      ],
+    );
   }
 
   Widget _buildDetailStat(String value, String label, {String? subValue}) {
@@ -971,7 +1324,6 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
         controller: _verticalScrollController,
         padding: const EdgeInsets.all(24),
         children: [
-          // Top Header
           Row(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
@@ -998,6 +1350,7 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
                   data: _memoryInfo.usageHistory,
                   color: const Color(0xFF8635A8),
                   fillColor: const Color(0xFF283C55),
+                  maxValue: 100.0,
                 ),
               ),
             ),
@@ -1020,16 +1373,15 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
                     children: [
                       Expanded(
                         flex: (usedPercentage * 1000).toInt(),
-                        child: Container(color: const Color(0xFF283C55)), // 使用中
+                        child: Container(color: const Color(0xFF283C55)),
                       ),
-                      // 可以添加其他内存类型的可视化, e.g., cached
                       Expanded(
                         flex: ((cachedGB / totalGB) * 1000).toInt(),
-                        child: Container(color: Colors.teal.withValues(alpha: 0.5)), // 缓存
+                        child: Container(color: Colors.teal.withValues(alpha: 0.5)),
                       ),
                       Expanded(
                         flex: ((1 - usedPercentage - (cachedGB / totalGB)) * 1000).toInt(),
-                        child: Container(color: Colors.transparent), // 可用
+                        child: Container(color: Colors.transparent),
                       ),
                     ],
                   ),
@@ -1039,7 +1391,6 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
           ),
           const SizedBox(height: 24),
   
-          // Stats Grid - Scrollable
           Scrollbar(
             controller: _horizontalMemoryScrollController,
             thumbVisibility: true,
@@ -1052,7 +1403,6 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // Left Column
                       SizedBox(
                         width: 180,
                         child: Column(
@@ -1067,7 +1417,6 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
                         ),
                       ),
                       const VerticalDivider(color: Colors.white24, thickness: 1, indent: 10, endIndent: 10),
-                      // Middle Column
                       Container(
                         width: 180,
                         padding: const EdgeInsets.symmetric(horizontal: 16.0),
@@ -1083,7 +1432,6 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
                         ),
                       ),
                       const VerticalDivider(color: Colors.white24, thickness: 1, indent: 10, endIndent: 10),
-                      // Right Column (Hardware)
                       SizedBox(
                         width: 180,
                         child: Padding(
@@ -1148,7 +1496,6 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
         controller: _verticalScrollController,
         padding: const EdgeInsets.all(24),
         children: [
-          // Top Header
           Row(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
@@ -1167,7 +1514,6 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
           ),
           const SizedBox(height: 16),
 
-          // Per-core graphs
           GridView.builder(
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
@@ -1188,6 +1534,7 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
                     data: _perCpuHistory.length > index ? _perCpuHistory[index] : [],
                     color: const Color(0xFF1B66B1),
                     fillColor: const Color(0xFF283C55),
+                    maxValue: 100.0,
                   ),
                 ),
               );
@@ -1195,7 +1542,6 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
           ),
           const SizedBox(height: 24),
 
-          // Stats Grid - Scrollable
           Scrollbar(
             controller: _horizontalScrollController,
             thumbVisibility: true,
@@ -1203,12 +1549,11 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
               controller: _horizontalScrollController,
               scrollDirection: Axis.horizontal,
               child: ConstrainedBox(
-                constraints: const BoxConstraints(minWidth: 550), // 保证最小宽度
+                constraints: const BoxConstraints(minWidth: 550),
                 child: IntrinsicHeight(
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // Left Column
                       SizedBox(
                         width: 180,
                         child: Column(
@@ -1223,7 +1568,6 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
                         ),
                       ),
                       const VerticalDivider(color: Colors.white24, thickness: 1, indent: 10, endIndent: 10),
-                      // Middle Column
                       Container(
                          width: 180,
                          padding: const EdgeInsets.symmetric(horizontal: 16.0),
@@ -1239,7 +1583,6 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
                          ),
                       ),
                       const VerticalDivider(color: Colors.white24, thickness: 1, indent: 10, endIndent: 10),
-                      // Right Column (Hardware)
                       SizedBox(
                         width: 240,
                         child: Padding(
@@ -1691,7 +2034,6 @@ class _TaskManagerPageState extends State<TaskManagerPage> {
   }
 }
 
-
 class _RunTaskDialog extends StatefulWidget {
   final Function(String) onRun;
   final VoidCallback onCancel;
@@ -1789,12 +2131,18 @@ class SparklinePainter extends CustomPainter {
   final List<double> data;
   final Color color;
   final Color? fillColor;
+  final double maxValue;
 
-  SparklinePainter({required this.data, required this.color, this.fillColor});
+  SparklinePainter({
+    required this.data,
+    required this.color,
+    this.fillColor,
+    required this.maxValue,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (data.isEmpty) return;
+    if (data.isEmpty || size.isEmpty) return;
 
     final paint = Paint()
       ..color = color
@@ -1810,16 +2158,25 @@ class SparklinePainter extends CustomPainter {
         end: Alignment.bottomCenter,
       ).createShader(Rect.fromLTWH(0, 0, size.width, size.height))
       ..style = PaintingStyle.fill;
-
-    const maxValue = 100.0;
     
     final path = Path();
     final fillPath = Path();
 
-    // If there's only one point, draw a line across.
-    if (data.length == 1) {
-      double value = data[0].clamp(0.0, maxValue);
-      double y = size.height - (value / maxValue * size.height);
+    // Helper to calculate Y position.
+    // Clamps the result to be slightly inside the canvas to prevent clipping issues,
+    // ensuring a line is visible even if at the top or bottom boundary.
+    double getY(double value) {
+      if (maxValue <= 0) {
+        return size.height - 1.0; // Draw near the bottom if maxValue is 0 or less.
+      }
+      final y = size.height - (value.clamp(0.0, maxValue) / maxValue * size.height);
+      // Clamp Y to be just inside the canvas bounds to ensure visibility.
+      return y.clamp(0.0, size.height - 1.0);
+    }
+    
+    // If there's only one data point, draw a horizontal line.
+    if (data.length < 2) {
+      final y = getY(data.first);
       path.moveTo(0, y);
       path.lineTo(size.width, y);
       
@@ -1828,29 +2185,27 @@ class SparklinePainter extends CustomPainter {
       fillPath.lineTo(size.width, y);
       fillPath.lineTo(size.width, size.height);
       fillPath.close();
-
     } else {
-      double stepX = size.width / (data.length - 1);
+      // If there are multiple points, draw a path.
+      final stepX = size.width / (data.length - 1);
 
-      for (int i = 0; i < data.length; i++) {
-        double value = data[i].clamp(0.0, maxValue);
-        double x = i * stepX;
-        double y = size.height - (value / maxValue * size.height);
+      final firstY = getY(data[0]);
+      path.moveTo(0, firstY);
 
-        if (i == 0) {
-          path.moveTo(x, y);
-          fillPath.moveTo(x, size.height);
-          fillPath.lineTo(x, y);
-        } else {
-          path.lineTo(x, y);
-          fillPath.lineTo(x, y);
-        }
+      fillPath.moveTo(0, size.height);
+      fillPath.lineTo(0, firstY);
+
+      for (int i = 1; i < data.length; i++) {
+        final x = i * stepX;
+        final y = getY(data[i]);
+        path.lineTo(x, y);
+        fillPath.lineTo(x, y);
       }
-
+      
+      // Complete the fill path to the bottom right corner.
       fillPath.lineTo(size.width, size.height);
       fillPath.close();
     }
-
 
     canvas.drawPath(fillPath, fillPaint);
     canvas.drawPath(path, paint);
@@ -1860,6 +2215,7 @@ class SparklinePainter extends CustomPainter {
   bool shouldRepaint(covariant SparklinePainter oldDelegate) {
     return oldDelegate.data != data || 
            oldDelegate.color != color || 
-           oldDelegate.fillColor != fillColor;
+           oldDelegate.fillColor != fillColor ||
+           oldDelegate.maxValue != maxValue;
   }
 }
